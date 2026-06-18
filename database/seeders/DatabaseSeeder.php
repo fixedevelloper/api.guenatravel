@@ -76,7 +76,9 @@ class DatabaseSeeder extends Seeder
         // ------------------------------------------------------------------
         // 2. ÉTABLISSEMENTS (Properties avec Traduction JSON & Adresse complète)
         // ------------------------------------------------------------------
-
+        $this->call([
+            AmenitySeeder::class,
+        ]);
         // [1] Grand Hôtel de la Plage (Hassan)
         $hotelPlage = Property::create([
             'host_id' => $hassan->id,
@@ -276,53 +278,5 @@ class DatabaseSeeder extends Seeder
             'total_inventory' => 4, 'default_price_per_night' => 25.00, 'is_active' => true,
         ]);
 
-
-        // ------------------------------------------------------------------
-        // 4. RÉSERVATION COMPLÈTE & SPLIT FINANCIER (Booking, Items & Commissions)
-        // ------------------------------------------------------------------
-
-        // (Le scénario de Jean à la Suite Prestige reste inchangé pour préserver vos calculs)
-        $booking = Booking::create([
-            'booking_reference' => 'BK-' . strtoupper(Str::random(6)),
-            'guest_id' => $jean->id,
-            'check_in' => now()->subDays(5)->format('Y-m-d'),
-            'check_out' => now()->subDays(2)->format('Y-m-d'),
-            'subtotal_amount' => 540.00,
-            'tax_amount' => 54.00,
-            'service_fee' => 15.00,
-            'total_amount' => 609.00,
-            'currency' => 'EUR',
-            'total_commission_amount' => 67.50,
-            'host_payout_amount' => 472.50,
-            'status' => 'confirmed',
-            'payment_status' => 'paid',
-            'guest_notes' => 'Demande une suite au dernier étage avec lit bébé si possible.',
-        ]);
-
-        BookingItem::create([
-            'booking_id' => $booking->id,
-            'room_id' => $roomSuite->id,
-            'quantity_ordered' => 1,
-            'commission_rate_applied' => $hotelPlage->commission_rate, // 12.50%
-            'commission_amount' => 67.50,
-            'nightly_prices' => [
-                ['date' => now()->subDays(5)->format('Y-m-d'), 'price' => 180.00],
-                ['date' => now()->subDays(4)->format('Y-m-d'), 'price' => 180.00],
-                ['date' => now()->subDays(3)->format('Y-m-d'), 'price' => 180.00],
-            ],
-        ]);
-
-        Commission::create([
-            'booking_id' => $booking->id,
-            'property_id' => $hotelPlage->id,
-            'base_amount' => 540.00,
-            'rate_applied' => $hotelPlage->commission_rate,
-            'commission_amount' => 67.50,
-            'status' => 'calculated',
-            'processed_at' => now()->subDays(5),
-        ]);
-        $this->call([
-            AmenitySeeder::class,
-        ]);
     }
 }

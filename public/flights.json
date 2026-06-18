@@ -1,0 +1,352 @@
+{
+    "status": "success",
+    "results_count": 5,
+    "flights": [
+        {
+            "id": "fl_sabre_af_953_rt",
+            "price_details": {
+                "base_price": 450000.00,
+                "taxes": 195000.00,
+                "margin_agency": 15000.00,
+                "final_price_to_pay": 660000.00,
+                "currency": "XAF"
+            },
+            "baggage_allowance": {
+                "checked": "2 PC (23kg)",
+                "cabin": "1 PC (12kg)"
+            },
+            "itinerary": [
+                {
+                    "direction": "outbound",
+                    "stops_count": 1,
+                    "total_duration": 530,
+                    "segments": [
+                        {
+                            "flight_number": "953",
+                            "airline_code": "AF",
+                            "airline_name": "Air France",
+                            "departure": {
+                                "airport": "DLA",
+                                "time": "2026-10-15T23:45:00"
+                            },
+                            "arrival": {
+                                "airport": "NSI",
+                                "time": "2026-10-16T00:35:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 50
+                        },
+                        {
+                            "flight_number": "953",
+                            "airline_code": "AF",
+                            "airline_name": "Air France",
+                            "departure": {
+                                "airport": "NSI",
+                                "time": "2026-10-16T01:45:00"
+                            },
+                            "arrival": {
+                                "airport": "CDG",
+                                "time": "2026-10-16T08:15:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 390
+                        }
+                    ]
+                },
+                {
+                    "direction": "inbound",
+                    "stops_count": 0,
+                    "total_duration": 415,
+                    "segments": [
+                        {
+                            "flight_number": "958",
+                            "airline_code": "AF",
+                            "airline_name": "Air France",
+                            "departure": {
+                                "airport": "CDG",
+                                "time": "2026-10-25T14:15:00"
+                            },
+                            "arrival": {
+                                "airport": "DLA",
+                                "time": "2026-10-25T21:10:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 415
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "fl_sabre_sn_503_ow",
+            "price_details": {
+                "base_price": 290000.00,
+                "taxes": 110000.00,
+                "margin_agency": 10000.00,
+                "final_price_to_pay": 410000.00,
+                "currency": "XAF"
+            },
+            "baggage_allowance": {
+                "checked": "1 PC (23kg)",
+                "cabin": "1 PC (8kg)"
+            },
+            "itinerary": [
+                {
+                    "direction": "outbound",
+                    "stops_count": 0,
+                    "total_duration": 430,
+                    "segments": [
+                        {
+                            "flight_number": "503",
+                            "airline_code": "SN",
+                            "airline_name": "Brussels Airlines",
+                            "departure": {
+                                "airport": "DLA",
+                                "time": "2026-10-15T22:30:00"
+                            },
+                            "arrival": {
+                                "airport": "BRU",
+                                "time": "2026-10-16T05:40:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 430
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "fl_sabre_et_912_rt",
+            "price_details": {
+                "base_price": 240000.00,
+                "taxes": 125000.00,
+                "margin_agency": 15000.00,
+                "final_price_to_pay": 380000.00,
+                "currency": "XAF"
+            },
+            "baggage_allowance": {
+                "checked": "2 PC (23kg)",
+                "cabin": "1 PC (7kg)"
+            },
+            "itinerary": [
+                {
+                    "direction": "outbound",
+                    "stops_count": 1,
+                    "total_duration": 765,
+                    "segments": [
+                        {
+                            "flight_number": "912",
+                            "airline_code": "ET",
+                            "airline_name": "Ethiopian Airlines",
+                            "departure": {
+                                "airport": "DLA",
+                                "time": "2026-10-15T14:05:00"
+                            },
+                            "arrival": {
+                                "airport": "ADD",
+                                "time": "2026-10-15T21:10:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 245
+                        },
+                        {
+                            "flight_number": "704",
+                            "airline_code": "ET",
+                            "airline_name": "Ethiopian Airlines",
+                            "departure": {
+                                "airport": "ADD",
+                                "time": "2026-10-15T23:55:00"
+                            },
+                            "arrival": {
+                                "airport": "CDG",
+                                "time": "2026-10-16T06:50:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 475
+                        }
+                    ]
+                },
+                {
+                    "direction": "inbound",
+                    "stops_count": 1,
+                    "total_duration": 810,
+                    "segments": [
+                        {
+                            "flight_number": "705",
+                            "airline_code": "ET",
+                            "airline_name": "Ethiopian Airlines",
+                            "departure": {
+                                "airport": "CDG",
+                                "time": "2026-10-25T18:15:00"
+                            },
+                            "arrival": {
+                                "airport": "ADD",
+                                "time": "2026-10-26T05:30:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 495
+                        },
+                        {
+                            "flight_number": "913",
+                            "airline_code": "ET",
+                            "airline_name": "Ethiopian Airlines",
+                            "departure": {
+                                "airport": "ADD",
+                                "time": "2026-10-26T10:45:00"
+                            },
+                            "arrival": {
+                                "airport": "DLA",
+                                "time": "2026-10-26T13:15:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 210
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "fl_sabre_tk_667_rt",
+            "price_details": {
+                "base_price": 380000.00,
+                "taxes": 165000.00,
+                "margin_agency": 25000.00,
+                "final_price_to_pay": 570000.00,
+                "currency": "XAF"
+            },
+            "baggage_allowance": {
+                "checked": "2 PC (23kg)",
+                "cabin": "1 PC (8kg)"
+            },
+            "itinerary": [
+                {
+                    "direction": "outbound",
+                    "stops_count": 1,
+                    "total_duration": 680,
+                    "segments": [
+                        {
+                            "flight_number": "667",
+                            "airline_code": "TK",
+                            "airline_name": "Turkish Airlines",
+                            "departure": {
+                                "airport": "DLA",
+                                "time": "2026-10-15T00:55:00"
+                            },
+                            "arrival": {
+                                "airport": "IST",
+                                "time": "2026-10-15T08:35:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 400
+                        },
+                        {
+                            "flight_number": "1821",
+                            "airline_code": "TK",
+                            "airline_name": "Turkish Airlines",
+                            "departure": {
+                                "airport": "IST",
+                                "time": "2026-10-15T11:10:00"
+                            },
+                            "arrival": {
+                                "airport": "CDG",
+                                "time": "2026-10-15T13:55:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 225
+                        }
+                    ]
+                },
+                {
+                    "direction": "inbound",
+                    "stops_count": 1,
+                    "total_duration": 710,
+                    "segments": [
+                        {
+                            "flight_number": "1824",
+                            "airline_code": "TK",
+                            "airline_name": "Turkish Airlines",
+                            "departure": {
+                                "airport": "CDG",
+                                "time": "2026-10-25T11:45:00"
+                            },
+                            "arrival": {
+                                "airport": "IST",
+                                "time": "2026-10-25T16:15:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 210
+                        },
+                        {
+                            "flight_number": "666",
+                            "airline_code": "TK",
+                            "airline_name": "Turkish Airlines",
+                            "departure": {
+                                "airport": "IST",
+                                "time": "2026-10-25T18:20:00"
+                            },
+                            "arrival": {
+                                "airport": "DLA",
+                                "time": "2026-10-26T01:40:00"
+                            },
+                            "booking_class": "Y",
+                            "duration": 440
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "id": "fl_sabre_af_953_j_business",
+            "price_details": {
+                "base_price": 1150000.00,
+                "taxes": 310000.00,
+                "margin_agency": 30000.00,
+                "final_price_to_pay": 1490000.00,
+                "currency": "XAF"
+            },
+            "baggage_allowance": {
+                "checked": "3 PC (32kg)",
+                "cabin": "2 PC (18kg total)"
+            },
+            "itinerary": [
+                {
+                    "direction": "outbound",
+                    "stops_count": 1,
+                    "total_duration": 530,
+                    "segments": [
+                        {
+                            "flight_number": "953",
+                            "airline_code": "AF",
+                            "airline_name": "Air France",
+                            "departure": {
+                                "airport": "DLA",
+                                "time": "2026-10-15T23:45:00"
+                            },
+                            "arrival": {
+                                "airport": "NSI",
+                                "time": "2026-10-16T00:35:00"
+                            },
+                            "booking_class": "J",
+                            "duration": 50
+                        },
+                        {
+                            "flight_number": "953",
+                            "airline_code": "AF",
+                            "airline_name": "Air France",
+                            "departure": {
+                                "airport": "NSI",
+                                "time": "2026-10-16T01:45:00"
+                            },
+                            "arrival": {
+                                "airport": "CDG",
+                                "time": "2026-10-16T08:15:00"
+                            },
+                            "booking_class": "J",
+                            "duration": 390
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

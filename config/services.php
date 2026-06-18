@@ -34,5 +34,25 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    // config/services.php
+
+    'sabre' => [
+        'url'           => env('SABRE_API_URL', 'https://api.platform.sabre.com'),
+        'client_id'     => env('SABRE_CLIENT_ID'),
+        'client_secret' => env('SABRE_CLIENT_SECRET'),
+        'pcc'           => env('SABRE_PCC'),
+        'target'        => env('SABRE_TARGET', 'Test'), // 'Test' ou 'Production'
+    ],
+    'travelport' => [
+        'username' => env('TRAVELPORT_USERNAME'),
+        'password' => env('TRAVELPORT_PASSWORD'),
+        'auth_url'      => env('TRAVELPORT_AUTH_URL'),
+        'base_url'      => env('TRAVELPORT_BASE_URL'),
+        'client_id'     => env('TRAVELPORT_CLIENT_ID'),
+        'client_secret' => env('TRAVELPORT_CLIENT_SECRET'),
+        'target_branch' => env('TRAVELPORT_TARGET_BRANCH'),
+        'pcc' => env('TRAVELPORT_PCC'),
+        'access_group' => env('TRAVELPORT_ACCESS_GROUP'),
+    ],
 
 ];

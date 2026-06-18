@@ -3,6 +3,7 @@
 use App\Http\Controllers\Admin\AmenityController;
 use App\Http\Controllers\CustomerDashboardController;
 use App\Http\Controllers\FavoriteController;
+use App\Http\Controllers\Flight\FlightController;
 use App\Http\Controllers\Host\HostBookingController;
 use App\Http\Controllers\Host\HostDashboardController;
 use App\Http\Controllers\Host\HostPayoutController;
@@ -40,7 +41,26 @@ Route::middleware('auth:sanctum')->group(function () {
 */
 // Recherche et découverte
 Route::get('/search', [SearchController::class, 'index']);
+Route::prefix('flights')->group(function () {
 
+    // ÉTAPE 1 : Rechercher des offres de vols (Next.js -> Laravel -> Travelport)
+    Route::post('/search', [FlightController::class, 'search'])->name('api.flights.search');
+
+    // ÉTAPE 2 & 3 : Vérification de l'inventaire, paiement Mobile Money et émission immédiate
+    Route::post('/verify-and-pay', [FlightController::class, 'verifyAndPay'])->name('api.flights.verify_pay');
+
+});
+
+// Groupement dédié à la gestion des billets et du cycle de vie des PNR existants
+Route::prefix('tickets')->group(function () {
+
+    // Inspecter un PNR existant (via son code de réservation à 6 caractères / Locator)
+    Route::post('/inspect', [TicketController::class, 'fetchAndInspect'])->name('api.tickets.inspect');
+
+    // Émettre manuellement ou en différé les e-tickets d'un dossier déjà réservé
+    Route::post('/issue', [TicketController::class, 'issue'])->name('api.tickets.issue');
+
+});
 // Accès aux propriétés et chambres
 Route::get('/properties', [PropertyController::class, 'index']);
 Route::get('/properties/{property}', [PropertyController::class, 'show']);
