@@ -42,7 +42,8 @@ Route::middleware('auth:sanctum')->group(function () {
 // Recherche et découverte
 Route::get('/search', [SearchController::class, 'index']);
 Route::prefix('flights')->group(function () {
-
+    Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
+    Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
     // ÉTAPE 1 : Rechercher des offres de vols (Next.js -> Laravel -> Travelport)
     Route::post('/search', [FlightController::class, 'search'])->name('api.flights.search');
 
