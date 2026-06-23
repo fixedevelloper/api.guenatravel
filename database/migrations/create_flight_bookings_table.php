@@ -16,7 +16,7 @@ return new class extends Migration {
             $table->string('pnr')->nullable()->unique()->index();
             $table->string('booking_type')->default('now'); // 'now' (immédiat) ou 'hold' (bloquer le tarif)
             $table->string('booking_status')->default('pending'); // 'pending', 'confirmed', 'ticketed', 'cancelled'
-
+            $table->json('raw_flight_data')->nullable();
             // Tarification et Paiement
             $table->decimal('total_amount', 12, 2);
             $table->decimal('amount_paid', 12, 2)->default(0.00);
