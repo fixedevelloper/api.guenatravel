@@ -66,6 +66,9 @@ class SabreService
 
     /**
      * Recherche de vols (Bargain Finder Max API)
+     * @param array $criteria
+     * @return array
+     * @throws \Exception
      */
     public function searchFlights(array $criteria): array
     {

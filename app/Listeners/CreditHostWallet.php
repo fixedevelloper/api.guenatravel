@@ -1,7 +1,7 @@
 <?php
 
-namespace App\Http\Listeners;
-use App\Http\Events\BookingConfirmed;
+namespace App\Listeners;
+use App\Events\BookingConfirmed;
 use App\Services\FinanceService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;

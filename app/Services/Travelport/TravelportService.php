@@ -76,7 +76,7 @@ class TravelportService
                     'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group,
                 ])
                 ->post($this->baseUrl . '11/air/catalog/search/catalogproductofferings', $payload);
-            logger($response);
+
             if ($response->failed()) {
                 Log::error('Travelport Catalog Error', [
                     'status' => $response->status(),
@@ -155,13 +155,405 @@ class TravelportService
     }
 
     /**
-     * Parseur de la réponse CatalogProductOfferingsResponse
+     * Parseur de la réponse CatalogProductOfferingsResponse enrichi pour AirPrice
+     * @param array $rawResponse
+     * @param array $criteria
+     * @return array
      */
     public function formatCatalogResponse(array $rawResponse, array $criteria): array
     {
+
+
         $root = $rawResponse['CatalogProductOfferingsResponse'] ?? [];
 
-        // 1. Interception des cas où aucun vol n'existe (Erreur métier sous statut HTTP 200)
+        if (isset($root['Result']['Error']) && is_array($root['Result']['Error'])) {
+
+            foreach ($root['Result']['Error'] as $error) {
+
+                if (($error['Message'] ?? '') === 'No flights found.') {
+
+                    return [
+                        'status' => 'success',
+                        'results_count' => 0,
+                        'flights' => []
+                    ];
+                }
+            }
+        }
+
+        $transactionId = $root['transactionId'] ?? null;
+
+        $catalogOfferingsNode = $root['CatalogProductOfferings'] ?? [];
+
+        $catalogOfferingsIdentifier =
+            $catalogOfferingsNode['Identifier']['value'] ?? null;
+
+        $offerings =
+            $catalogOfferingsNode['CatalogProductOffering'] ?? [];
+
+        if (!isset($offerings[0])) {
+            $offerings = [$offerings];
+        }
+
+        $flightDictionary = [];
+        $productDictionary = [];
+
+        foreach (($root['ReferenceList'] ?? []) as $reference) {
+
+            if (
+                ($reference['@type'] ?? '') === 'ReferenceListFlight'
+                && isset($reference['Flight'])
+            ) {
+
+                $flights = isset($reference['Flight'][0])
+                    ? $reference['Flight']
+                    : [$reference['Flight']];
+
+                foreach ($flights as $flight) {
+
+                    if (!empty($flight['id'])) {
+                        $flightDictionary[$flight['id']] = $flight;
+                    }
+                }
+            }
+
+            if (
+                ($reference['@type'] ?? '') === 'ReferenceListProduct'
+                && isset($reference['Product'])
+            ) {
+
+                $products = isset($reference['Product'][0])
+                    ? $reference['Product']
+                    : [$reference['Product']];
+
+                foreach ($products as $product) {
+
+                    if (!empty($product['id'])) {
+                        $productDictionary[$product['id']] = $product;
+                    }
+                }
+            }
+        }
+
+        $formattedFlights = [];
+
+        foreach ($offerings as $index => $offering) {
+
+            $offeringId = $offering['id'] ?? null;
+
+            $currency =
+                $root['CurrencyRateConversion'][0]['TargetCurrency']['value']
+                ?? 'XAF';
+
+            $basePrice = 0;
+            $taxes = 0;
+            $totalPrice = 0;
+
+            $productBrandOptions = $offering['ProductBrandOptions'] ?? [];
+
+            $firstOption = isset($productBrandOptions[0])
+                ? $productBrandOptions[0]
+                : $productBrandOptions;
+
+            $brandOfferings =
+                $firstOption['ProductBrandOffering'] ?? [];
+
+            $firstBrandOffering = isset($brandOfferings[0])
+                ? $brandOfferings[0]
+                : $brandOfferings;
+
+            $priceDetails =
+                $firstBrandOffering['BestCombinablePrice'] ?? [];
+
+            if (!empty($priceDetails)) {
+
+                $basePrice = $priceDetails['Base'] ?? 0;
+
+                $taxes =
+                    $priceDetails['TotalTaxes']
+                    ?? ($priceDetails['Taxes']['TotalTaxes'] ?? 0);
+
+                $totalPrice =
+                    $priceDetails['TotalPrice']
+                    ?? ($basePrice + $taxes);
+
+                $currency =
+                    $priceDetails['CurrencyCode']['value']
+                    ?? $currency;
+            }
+
+            $agencyFees = 0;
+
+            $availableBrands = [];
+            $productBrandOfferings = [];
+            $productRefs = [];
+            $flightRefsAll = [];
+
+            foreach (($offering['Brand'] ?? []) as $brand) {
+
+                if (!empty($brand['BrandRef'])) {
+                    $availableBrands[] = $brand['BrandRef'];
+                }
+            }
+
+            $optionsLoop = isset($offering['ProductBrandOptions'][0])
+                ? $offering['ProductBrandOptions']
+                : [$offering['ProductBrandOptions']];
+
+            foreach ($optionsLoop as $option) {
+
+                foreach (($option['flightRefs'] ?? []) as $flightRef) {
+                    $flightRefsAll[] = $flightRef;
+                }
+
+                $pboList = isset($option['ProductBrandOffering'][0])
+                    ? $option['ProductBrandOffering']
+                    : [$option['ProductBrandOffering']];
+
+                foreach ($pboList as $pbo) {
+
+                    $products = [];
+
+                    foreach (($pbo['Product'] ?? []) as $product) {
+
+                        $productRef =
+                            $product['productRef'] ?? null;
+
+                        if ($productRef) {
+                            $products[] = $productRef;
+                            $productRefs[] = $productRef;
+                        }
+                    }
+
+                    $productBrandOfferings[] = [
+                        'brand_ref' =>
+                            $pbo['Brand']['BrandRef'] ?? null,
+
+                        'product_refs' => $products,
+
+                        'terms_and_conditions_ref' =>
+                            $pbo['TermsAndConditions']['termsAndConditionsRef']
+                            ?? null
+                    ];
+                }
+            }
+
+            $flightOffer = [
+
+                'id' => 'fl_tvpt_' . $offeringId . '_' . $index,
+
+                'travelport' => [
+
+                    'transaction_id' => $transactionId,
+
+                    'offering_id' => $offeringId,
+
+                    'gds_authority_value' =>
+                        $catalogOfferingsIdentifier,
+
+                    // AJOUT AIRPRICE
+                    'catalog_offerings_identifier' =>
+                        $catalogOfferingsIdentifier,
+
+                    'available_brands' =>
+                        array_values(array_unique($availableBrands)),
+
+                    'product_brand_offerings' =>
+                        $productBrandOfferings,
+
+                    'products' =>
+                        array_values(array_unique($productRefs)),
+
+                    'flight_refs' =>
+                        array_values(array_unique($flightRefsAll)),
+
+                    'raw_offering' => $offering
+                ],
+
+                'price_details' => [
+                    'base_price' => $basePrice,
+                    'taxes' => $taxes,
+                    'final_price_to_pay' => $totalPrice + $agencyFees,
+                    'currency' => $currency,
+                    'agency_fees' => $agencyFees
+                ],
+
+                'itinerary' => [],
+
+                'baggage_allowance' => [
+                    'checked' => '1 PC',
+                    'cabin' => '1 PC'
+                ]
+            ];
+
+            foreach ($optionsLoop as $brandIndex => $option) {
+
+                if (empty($option)) {
+                    continue;
+                }
+
+                $brandValue = null;
+                $productRef = null;
+
+                if (isset($option['ProductBrandOffering'])) {
+
+                    $offeringsList =
+                        isset($option['ProductBrandOffering'][0])
+                            ? $option['ProductBrandOffering']
+                            : [$option['ProductBrandOffering']];
+
+                    $brandValue =
+                        $offeringsList[0]['Brand']['BrandRef']
+                        ?? null;
+
+                    $productRef =
+                        $offeringsList[0]['Product'][0]['productRef']
+                        ?? null;
+                }
+
+                $flightRefs =
+                    $option['flightRefs'] ?? [];
+
+                $journeyDuration =
+                    $productDictionary[$productRef]['totalDuration']
+                    ?? null;
+
+                $journey = [
+
+                    'direction' =>
+                        $brandIndex === 0
+                            ? 'outbound'
+                            : 'inbound',
+
+                    'offering_id' => $offeringId,
+
+                    'brand_value' => $brandValue,
+
+                    // AJOUT AIRPRICE
+                    'product_ref' => $productRef,
+                    'flight_refs' => $flightRefs,
+
+                    'duration' => $journeyDuration,
+
+                    'stops_count' =>
+                        max(0, count($flightRefs) - 1),
+
+                    'segments' => []
+                ];
+
+                foreach ($flightRefs as $fRefIndex => $flightRef) {
+
+                    $segment =
+                        $flightDictionary[$flightRef] ?? null;
+
+                    if (!$segment) {
+                        continue;
+                    }
+
+                    $bookingClass = null;
+                    $cabinType = 'Economy';
+
+                    if (
+                        $productRef &&
+                        isset($productDictionary[$productRef]['PassengerFlight'][0]['FlightProduct'])
+                    ) {
+
+                        $flightProducts =
+                            $productDictionary[$productRef]['PassengerFlight'][0]['FlightProduct'];
+
+                        foreach ($flightProducts as $fp) {
+
+                            $sequences =
+                                $fp['segmentSequence'] ?? [];
+
+                            if (in_array($fRefIndex + 1, $sequences)) {
+
+                                $bookingClass =
+                                    $fp['classOfService'] ?? null;
+
+                                $cabinType =
+                                    $fp['cabin'] ?? 'Economy';
+
+                                break;
+                            }
+                        }
+                    }
+
+                    $journey['segments'][] = [
+
+                        // AJOUT AIRPRICE
+                        'segment_ref' => $flightRef,
+                        'segment_sequence' => $fRefIndex + 1,
+
+                        'flight_number' =>
+                            $segment['number']
+                            ?? ($segment['FlightNumber'] ?? null),
+
+                        'airline_code' =>
+                            $segment['carrier']
+                            ?? ($segment['Carrier'] ?? null),
+
+                        'airline_name' =>
+                            ($segment['carrier'] === 'SN')
+                                ? 'Brussels Airlines'
+                                : (
+                            ($segment['carrier'] === 'UA')
+                                ? 'United Airlines'
+                                : 'Compagnie GDS'
+                            ),
+
+                        'departure' => [
+                            'airport' =>
+                                $segment['Departure']['location']
+                                ?? null,
+                            'time' =>
+                                ($segment['Departure']['date'] ?? '')
+                                . 'T'
+                                . ($segment['Departure']['time'] ?? '')
+                        ],
+
+                        'arrival' => [
+                            'airport' =>
+                                $segment['Arrival']['location']
+                                ?? null,
+                            'time' =>
+                                ($segment['Arrival']['date'] ?? '')
+                                . 'T'
+                                . ($segment['Arrival']['time'] ?? '')
+                        ],
+
+                        'booking_class' => $bookingClass,
+
+                        'cabin' => $cabinType,
+
+                        'duration' =>
+                            $segment['duration'] ?? null
+                    ];
+                }
+
+                if (!empty($journey['segments'])) {
+                    $flightOffer['itinerary'][] = $journey;
+                }
+            }
+
+            if (!empty($flightOffer['itinerary'])) {
+                $formattedFlights[] = $flightOffer;
+            }
+        }
+
+        return [
+            'status' => 'success',
+            'transaction_id' => $transactionId,
+            'results_count' => count($formattedFlights),
+            'flights' => $formattedFlights
+        ];
+    }
+    public function formatCatalogResponse2(array $rawResponse, array $criteria): array
+    {
+        logger($rawResponse);
+        $root = $rawResponse['CatalogProductOfferingsResponse'] ?? [];
+
+        // 1. Interception des cas où aucun vol n'existe
         if (isset($root['Result']['status']) && $root['Result']['status'] === 'Complete') {
             $errors = $root['Result']['Error'] ?? [];
             foreach ($errors as $error) {
@@ -170,6 +562,10 @@ class TravelportService
                 }
             }
         }
+
+        // 🔥 INJECTION TECHNIQUE 1 : L'identifiant d'autorité du catalogue indispensable pour le pricing
+        $gdsAuthorityValue = $root['CatalogProductOfferings']['Identifier']['value']
+            ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E';
 
         $offeringsContainer = $root['CatalogProductOfferings'] ?? [];
         $offerings = $offeringsContainer['CatalogProductOffering'] ?? [];
@@ -188,31 +584,41 @@ class TravelportService
         // 3. Transformation des offres de catalogue vers votre format unifié
         foreach ($offerings as $index => $offering) {
 
-            // Extraction des montants (À adapter selon les objets réels de ProductBrandOffering)
-            // Fallback en XAF pour la cohérence monétaire de votre plateforme
+            // 🔥 INJECTION TECHNIQUE 2 : Le CatalogProductOffering ID indispensable pour fixer le prix
+            $offeringId = $offering['id'] ?? 'cpo_default';
+
             $baseAmount = 280000;
             $taxes = 95000;
             $totalAmount = $baseAmount + $taxes;
             $currency = $root['CurrencyRateConversion'][0]['TargetCurrency']['value'] ?? 'XAF';
 
             $flightOffer = [
-                'id' => 'fl_tvpt_' . ($offering['id'] ?? uniqid()) . '_' . $index,
+                'id' => 'fl_tvpt_' . $offeringId . '_' . $index,
+                'gds_authority_value' => $gdsAuthorityValue, // Injecté à la racine pour votre AirPrice
                 'price_details' => [
-                    'base_price'  => (float)$baseAmount,
-                    'taxes'       => (float)$taxes,
-                    'total_sabre' => (float)$totalAmount, // Clé pivot conservée pour vos markups
-                    'currency'    => $currency
+                    'base_price'         => (float)$baseAmount,
+                    'taxes'              => (float)$taxes,
+                    'final_price_to_pay' => (float)$totalAmount,
+                    'currency'           => $currency
                 ],
                 'itinerary' => []
             ];
 
-            // 4. Traitement du trajet aller (Outbound) basé sur les flightRefs (ex: ["s1", "s2"])
+            // 4. Traitement des trajets (Outbound / Inbound)
             $brandOptions = $offering['ProductBrandOptions'] ?? [];
             foreach ($brandOptions as $bIdx => $option) {
                 $flightRefs = $option['flightRefs'] ?? [];
 
+                // 🔥 INJECTION TECHNIQUE 3 : Recherche de la structure "Brand" Travelport v11
+                // Le brand_value se trouve souvent imbriqué dans ProductBrandOffering ou ProductIdentifier
+                $brandValue = $option['ProductBrandOffering']['ProductIdentifier']['value']
+                    ?? $option['ProductIdentifier']['value']
+                    ?? 'brand_default';
+
                 $journey = [
                     'direction'   => ($bIdx === 0) ? 'outbound' : 'inbound',
+                    'offering_id' => $offeringId, // Rattaché au trajet pour être lu par priceFlightOffer
+                    'brand_value' => $brandValue, // Rattaché au trajet pour être lu par priceFlightOffer
                     'stops_count' => max(0, count($flightRefs) - 1),
                     'segments'    => []
                 ];
@@ -237,18 +643,18 @@ class TravelportService
                     ];
                 }
 
-                // Fallback structurel si ReferenceList n'est pas alimenté dans l'environnement de Mock
+                // Fallback structural Mock
                 if (empty($journey['segments'])) {
                     $journey['segments'][] = [
                         'flight_number' => '101',
                         'airline_code'  => 'UA',
                         'airline_name'  => 'United Airlines',
                         'departure' => [
-                            'airport' => $offering['Departure'], // DEN
+                            'airport' => $offering['Departure'],
                             'time'    => $criteria['departure_date'] . 'T08:00:00'
                         ],
                         'arrival' => [
-                            'airport' => $offering['Arrival'], // ORD
+                            'airport' => $offering['Arrival'],
                             'time'    => $criteria['departure_date'] . 'T11:30:00'
                         ],
                         'booking_class' => 'Y',
@@ -259,22 +665,24 @@ class TravelportService
                 $flightOffer['itinerary'][] = $journey;
             }
 
-            // 5. Traitement du trajet retour (Inbound) si FlexNextLeg est défini
+            // 5. Traitement alternatif FlexNextLeg
             if (!empty($offering['FlexNextLeg'])) {
                 foreach ($offering['FlexNextLeg'] as $nextLeg) {
                     $flightOffer['itinerary'][] = [
                         'direction'   => 'inbound',
+                        'offering_id' => $offeringId,
+                        'brand_value' => 'brand_default',
                         'stops_count' => 0,
                         'segments'    => [[
                             'flight_number' => '102',
                             'airline_code'  => 'UA',
                             'airline_name'  => 'United Airlines',
                             'departure' => [
-                                'airport' => $nextLeg['Departure'], // ORD
+                                'airport' => $nextLeg['Departure'],
                                 'time'    => $nextLeg['DepartureDate'] . 'T15:00:00'
                             ],
                             'arrival' => [
-                                'airport' => $nextLeg['Arrival'], // DEN
+                                'airport' => $nextLeg['Arrival'],
                                 'time'    => $nextLeg['DepartureDate'] . 'T18:45:00'
                             ],
                             'booking_class' => 'Y',

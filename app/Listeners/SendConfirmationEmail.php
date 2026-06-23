@@ -1,9 +1,8 @@
 <?php
 
-namespace App\Http\Listeners;
+namespace App\Listeners;
 
 use App\Events\BookingConfirmed; // Ajustez le namespace selon votre classe BookingConfirmed
-use App\Http\Events\BookingConfirmed;
 use App\Mail\BookingConfirmationMail; // Votre classe Mailable Laravel
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;

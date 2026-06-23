@@ -78,7 +78,13 @@ class User extends Authenticatable
     {
         return $this->hasMany(Withdrawal::class);
     }
-
+    /**
+     * Récupérer toutes les réservations de vols de l'utilisateur
+     */
+    public function flightBookings(): HasMany
+    {
+        return $this->hasMany(FlightBooking::class)->orderBy('created_at', 'desc');
+    }
     /*
     |--------------------------------------------------------------------------
     | Helpers de Rôles (Pratique pour les Middlewares / Politiques)

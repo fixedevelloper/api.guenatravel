@@ -16,235 +16,18 @@ class FlightBookingService
     public function __construct(TravelportService $travelportService)
     {
         $this->travelportService = $travelportService;
-        $this->baseUrl = config('services.travelport.base_url'); // https://api.pp.travelport.net/
+        $this->baseUrl = config('services.travelport.base_url');
         $this->pcc = config('services.travelport.pcc', 'DU7_1G');
         $this->access_group = config('services.travelport.access_group', 'DU7_1G');
     }
 
-    /**
-     * ÉTAPE 1 : Rechercher les offres de vols tarifées (Low Fare Search)
-     * Endpoint: /air/catalog/search/catalogproductofferings
-     * @param array $criteria
-     * @return array
-     * @throws \Exception
-     */
+
     public function searchFlightOffers(array $criteria): array
     {
         return $this->travelportService->searchOffers($criteria);
     }
 
-    /**
-     * ÉTAPE 2 : Vérifier la disponibilité réelle des sièges (Pre-Checkout Guard)
-     * Endpoint: /air/search/airAvailability
-     * @param array $selectedFlightData
-     * @return bool
-     */
-    public function verifySeatAvailability(array $selectedFlightData): bool
-    {
-        $token = $this->travelportService->getAccessToken();
-        $reservationResourceIdentifier = $selectedFlightData['id'];
-
-        // 1. Extraction et formatage des segments
-        $segments = [];
-        foreach ($selectedFlightData['itinerary'] as $journey) {
-            foreach ($journey['segments'] as $seg) {
-                $departureDate = explode('T', $seg['departure']['time'])[0];
-                $departureTime = isset(explode('T', $seg['departure']['time'])[1])
-                    ? substr(explode('T', $seg['departure']['time'])[1], 0, 8)
-                    : '00:00:00';
-
-                $segments[] = [
-                    'departureDate' => $departureDate,
-                    'departureTime' => $departureTime,
-                    'From' => ['value' => $seg['departure']['airport']],
-                    'To' => ['value' => $seg['arrival']['airport']],
-                    'CarrierPreference' => [
-                        [
-                            '@type' => 'CarrierPreference',
-                            'preferenceType' => 'Preferred',
-                            'carriers' => [$seg['airline_code']]
-                        ]
-                    ]
-                ];
-            }
-        }
-
-        // 2. Construction du Payload
-        $payload = [
-            'CatalogProductOfferingsQueryRequest' => [
-                'CatalogProductOfferingsRequest' => [
-                    '@type' => 'CatalogProductOfferingsRequestAir',
-                    'offersPerPage' => 10,
-                    'contentSourceList' => ['GDS'],
-                    'PassengerCriteria' => [
-                        [
-                            '@type' => 'PassengerCriteria',
-                            'number' => 1,
-                            'passengerTypeCode' => 'ADT'
-                        ]
-                    ],
-                    'SearchCriteriaFlight' => $segments,
-                    'SearchType' => 'MetaSearch'
-                ]
-            ]
-        ];
-
-        // 3. Appel à l'API Travelport
-        $response = Http::withToken($token)
-            ->withHeaders([
-                'Accept-Encoding' => 'gzip, deflate',
-                'Content-Type' => 'application/json',
-                'TVP-PCC-Core' => $this->pcc,
-                'TraceId' => 'Verify_' . uniqid(),
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group,
-                'travelportPlusSessionIdentifier' => $reservationResourceIdentifier
-            ])
-            ->post($this->baseUrl . '11/air/search/airAvailability', $payload);
-
-        if ($response->failed()) {
-            Log::warning('Travelport AirAvailability Check Failed', [
-                'status' => $response->status(),
-                'body' => $response->body()
-            ]);
-            return false;
-        }
-
-        $responseData = $response->json();
-
-        // 4. CORRECTION ALIGNÉE SUR TON LOG :
-        // On extrait le tableau des offres de vols retourné par le catalogue
-        $offerings = $responseData['CatalogProductOfferingsResponse']['CatalogProductOfferings']['CatalogProductOffering'] ?? [];
-
-        // Si le GDS renvoie au moins une offre (comme le tableau indexé [0, 1, 2...] de ton log), le siège est dispo.
-        if (!empty($offerings) && count($offerings) > 0) {
-            return true;
-        }
-
-        // Analyse de secours si un bloc d'erreur alternatif ou de rejet est présent à la racine
-        if (isset($responseData['Result']['Error']) || isset($responseData['Error'])) {
-            Log::info("Travelport a renvoyé un bloc d'erreur explicite d'indisponibilité.");
-            return false;
-        }
-
-        return false;
-    }
-
-    /**
-     * Injecte le profil client dans le Reservation Workbench Travelport.
-     *
-     * PUT /air/book/profile/reservationworkbench/{identifier}/clientprofile
-     */
-    public function applyClientProfile(
-        string $sessionIdentifier,
-        array $passengersData
-    ): array
-    {
-        if (empty($sessionIdentifier)) {
-            throw new \InvalidArgumentException(
-                'Le sessionIdentifier Travelport est obligatoire.'
-            );
-        }
-        $sessionIdentifier = '49f58f5f-c443-43b4-9f5d-be405fd00a01';
-        $token = $this->travelportService->getAccessToken();
-
-        // Construction du PersonalTitle depuis le passager principal
-        $leadPassenger = $passengersData[0] ?? null;
-        $personalTitle = 'DOE/J';
-
-        if ($leadPassenger) {
-            $lastName = strtoupper(preg_replace('/[^A-Za-z]/', '', $leadPassenger['last_name'] ?? ''));
-            $firstName = strtoupper(preg_replace('/[^A-Za-z]/', '', $leadPassenger['first_name'] ?? ''));
-
-            if ($lastName && $firstName) {
-                $personalTitle = $lastName . '/' . $firstName;
-            }
-        }
-
-        $payload = [
-            'ClientProfileMoveHeaderModifiers' => [
-                'BusinessTitle' => 'CREATIV_TRIPS',
-                'PersonalTitle' => $personalTitle,
-                'MultipleIndicator' => true,
-                'SelectIndicator' => true,
-                'MergeIndicator' => true,
-                'RelatedMoveIndicator' => 'Y',
-            ],
-            'ClientProfileMoveTravelerFlightModifiers' => array_map(
-                fn($i, $p) => [
-                    'TravelerRef' => 't' . ($i + 1),
-                    'FlightRef' => 's1',
-                ],
-                array_keys($passengersData),
-                $passengersData
-            ),
-        ];
-
-        // ✅ URL corrigée — sans préfixe /11/ ni /res-profile-do/
-        $url = rtrim($this->baseUrl, '/')
-            . "/11/air/book/profile/reservationworkbench/{$sessionIdentifier}/clientprofile";
-
-        Log::info('[Travelport] applyClientProfile → Request', [
-            'url' => $url,
-            'session_identifier' => $sessionIdentifier,
-            'payload' => $payload,
-        ]);
-
-        try {
-            $response = Http::timeout(60)
-                ->withToken($token)
-                ->acceptJson()
-                ->withHeaders([
-                    'Content-Type' => 'application/json',
-                    'TVP-PCC-Core' => $this->pcc,
-                    'TraceId' => 'Profile_' . $sessionIdentifier . '_' . time(),
-                    'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group,
-                    'travelportPlusSessionIdentifier' => $sessionIdentifier,
-                ])
-                ->put($url, $payload);
-
-            Log::info('[Travelport] applyClientProfile → Response', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
-
-            if (!$response->successful()) {
-                $json = $response->json() ?? [];
-                $errorMessage = $json['errors'][0]['message']
-                    ?? $json['message']
-                    ?? "HTTP {$response->status()} — {$response->body()}";
-
-                throw new \RuntimeException(
-                    "applyClientProfile failed [{$response->status()}] : {$errorMessage}"
-                );
-            }
-
-            return $response->json() ?? [];
-
-        } catch (\RuntimeException $e) {
-            throw $e;
-
-        } catch (\Throwable $e) {
-            Log::error('[Travelport] applyClientProfile → Exception', [
-                'session_identifier' => $sessionIdentifier,
-                'message' => $e->getMessage(),
-                'url' => $url,
-                'payload' => $payload,
-            ]);
-
-            throw new \RuntimeException(
-                'Échec applyClientProfile Travelport : ' . $e->getMessage()
-            );
-        }
-    }
-    /**
-     * Crée une session de réservation (Reservation Workbench) auprès de Travelport.
-     *
-     * Endpoint: POST https://{{baseURL}}/{{version}}/air/book/session/reservationworkbench
-     *
-     * @return string L'UUID de la session générée (ex: "07c5c53c-7272-46c9-ad13-226e8ef0aa96")
-     * @throws \RuntimeException En cas d'échec de la requête API
-     */
-    public function createInitReservationWorkbench(): string
+    public function createNewWorkbench(): string
     {
         $token = $this->travelportService->getAccessToken();
         $version = '11'; // Version utilisée dans vos endpoints précédents
@@ -300,349 +83,377 @@ class FlightBookingService
 
         return $sessionUuid;
     }
-    /**
-     * ÉTAPE 3 : Créer le Reservation Workbench (Session GDS)
-     * POST /11/air/book/reservationworkbench
-     * @return string — sessionIdentifier UUID
-     */
-    /**
-     * ÉTAPE 4 : Créer le Reservation Workbench (Session GDS)
-     * POST /11/air/book/session/reservationworkbench
-     * @param array $selectedFlight
-     * @param array $passengers
-     * @param array $contactInfo
-     * @return string — sessionIdentifier UUID Travelport
-     */
-    public function createReservationWorkbench(array $selectedFlight, array $passengers, array $contactInfo): string
-    {
-        $token             = $this->travelportService->getAccessToken();
-        $gdsAuthorityValue = $selectedFlight['gds_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E';
 
-        // Construction des Travelers
-        $travelerList = [];
-        foreach ($passengers as $index => $passenger) {
-            $prefix     = ($passenger['civility'] === 'Mme') ? 'Mrs' : 'Mr';
-            $travelerId = 'traveler_' . ($index + 1);
-            $travelerRef = 't' . ($index + 1);
+    /**
+     * Calcule et valide le tarif d'une offre de vol auprès de Travelport GDS v11.
+     *
+     * @param string $reservationResourceIdentifier Identifiant de session Travelport
+     * @param array $selectedFlight Données complètes de l'itinéraire sélectionné
+     * @param array $passengers Liste des passagers associés
+     * @return array
+     * @throws \Exception
+     */
+    public function priceFlightOffer(
+        string $reservationResourceIdentifier,
+        array $selectedFlight,
+        array $passengers
+    ): array {
 
-            $travelerList[] = [
-                '@type'       => 'Traveler',
-                'id'          => $travelerId,
-                'TravelerRef' => $travelerRef,
-                'Identifier'  => [
-                    'value'     => $gdsAuthorityValue,
-                    'authority' => 'TVPT',
-                ],
-                'birthDate' => $passenger['birth_date'],
-                'gender'    => ($prefix === 'Mr') ? 'Male' : 'Female',
-                'PersonName' => [
-                    '@type'   => 'PersonNameDetail',
-                    'Prefix'  => $prefix,
-                    'Given'   => strtoupper($passenger['first_name']),
-                    'Surname' => strtoupper($passenger['last_name']),
-                ],
-                'Telephone' => [
-                    [
-                        '@type'             => 'Telephone',
-                        'countryAccessCode' => '237',
-                        'phoneNumber'       => str_replace([' ', '+237'], '', $contactInfo['phone'] ?? ''),
-                        'role'              => 'Mobile',
-                    ]
-                ],
-                'Email' => [
-                    [
-                        'value'     => $contactInfo['email'] ?? 'agence@creativtrips.com',
-                        'id'        => 'email_' . ($index + 1),
-                        'emailType' => 'FROM',
-                        'validInd'  => true,
-                    ]
-                ],
+        $token = $this->travelportService->getAccessToken();
+
+        if (empty($token)) {
+            throw new \Exception('Impossible d’obtenir le token Travelport.');
+        }
+
+        if (empty($reservationResourceIdentifier)) {
+            throw new \Exception('Travelport Session Identifier manquant.');
+        }
+
+        /**
+         * 1. EXTRACTION SÉCURISÉE DES IDENTIFIANTS GDS
+         */
+        $travelportData = $selectedFlight['travelport'] ?? [];
+
+        // L'identifiant spécifique de l'offre (Ex: "o2")
+        $offeringId =
+            $travelportData['offering_id']
+            ?? $selectedFlight['offering_id']
+            ?? $selectedFlight['itinerary'][0]['offering_id']
+            ?? null;
+
+        // L'identifiant global du catalogue (Ex: "c32724e4-7fce-...")
+        $catalogOfferingsIdentifierValue =
+            $travelportData['catalog_offerings_identifier']
+            ?? $travelportData['gds_authority_value']
+            ?? $selectedFlight['id']
+            ?? null;
+
+        $transactionId = $travelportData['transaction_id'] ?? null;
+
+        if (empty($offeringId)) {
+            Log::error('Travelport AirPrice - Missing Offering ID', [
+                'selected_flight' => $selectedFlight
+            ]);
+            throw new \Exception('Catalog Product Offering ID introuvable pour la sélection.');
+        }
+
+        /**
+         * 2. CONSTRUCTION DU PASSENGERCRITERIA
+         */
+        $passengerCriteria = [];
+        if (!empty($passengers)) {
+            foreach ($passengers as $index => $passenger) {
+                $passengerCriteria[] = [
+                    '@type'             => 'PassengerCriteria',
+                    'number'            => 1,
+                    'passengerTypeCode' => $passenger['passenger_type'] ?? 'ADT',
+                    'id'                => 'psgr_' . ($index + 1)
+                ];
+            }
+        } else {
+            $passengerCriteria[] = [
+                '@type'             => 'PassengerCriteria',
+                'number'            => 1,
                 'passengerTypeCode' => 'ADT',
-                'TravelDocument' => [
-                    [
-                        '@type'      => 'TravelDocumentDetail',
-                        'docNumber'  => strtoupper($passenger['passport_number']),
-                        'docType'    => 'Passport',
-                        'expireDate' => now()->addYears(3)->format('Y-m-d'),
-                        'id'         => 'doc_' . ($index + 1),
-                        'Gender'     => ($prefix === 'Mr') ? 'Male' : 'Female',
-                        'PersonName' => [
-                            '@type'   => 'PersonNameDetail',
-                            'Prefix'  => $prefix,
-                            'Given'   => strtoupper($passenger['first_name']),
-                            'Surname' => strtoupper($passenger['last_name']),
-                        ],
-                    ]
-                ],
+                'id'                => 'psgr_1'
             ];
         }
 
-        $payload = [
-            '@type' => 'Reservation',
-            'id'    => 'REF_' . strtoupper(uniqid()),
-            'Identifier' => [
-                'value'     => $gdsAuthorityValue,
-                'authority' => 'TVPT',
-            ],
-            'Offer' => [
-                [
-                    '@type'    => 'Offer',
-                    'id'       => 'offer_1',
-                    'offerRef' => 'offer_1',
+        /**
+         * 3. MATCHING DYNAMIQUE DES MARQUES ET DES PRODUITS VALIDES (Anti-p0 Error)
+         */
+        $offeringSelection = [];
+        $itinerary = $selectedFlight['itinerary'] ?? [];
+
+        // Récupération de la table des correspondances (Brand -> Products) renvoyée par le GDS
+        $productBrandOfferings = $travelportData['product_brand_offerings'] ?? [];
+
+        foreach ($itinerary as $index => $journey) {
+            $segmentOfferingId = $journey['offering_id'] ?? $offeringId;
+            $brandRef          = $journey['brand_value'] ?? null; // Ex: "b3"
+
+            // On cherche le vrai identifiant de produit (productRef) rattaché à la marque choisie
+            $productRef = null;
+            foreach ($productBrandOfferings as $offering) {
+                if (($offering['brand_ref'] ?? '') === $brandRef) {
+                    // On extrait le premier produit disponible pour cette marque (Ex: "p2" ou "p3")
+                    $productRef = $offering['product_refs'][0] ?? null;
+                    break;
+                }
+            }
+
+            // Fallback de secours si aucune correspondance n'est trouvée dans le tableau
+            if (empty($productRef)) {
+                $productRef = $travelportData['products'][0] ?? 'p1';
+            }
+
+            $offeringSelection[] = [
+                '@type' => 'CatalogProductOfferingSelection',
+                'CatalogProductOfferingIdentifier' => [
+                    'id' => 'cpo_' . ($index + 1),
                     'Identifier' => [
-                        'value'     => $gdsAuthorityValue,
-                        'authority' => 'TVPT',
+                        'value'     => $segmentOfferingId,
+                        'authority' => 'TVPT'
                     ],
-                    'ContentSource' => 'GDS',
-                    'Product' => [
-                        [
-                            '@type'      => 'ProductAir',
-                            'id'         => 'product_1',
-                            'productRef' => 'product_1',
-                            'Identifier' => [
-                                'value'     => $gdsAuthorityValue,
-                                'authority' => 'TVPT',
-                            ],
+                    'CatalogProductOfferingRef' => 'cpo_' . ($index + 1)
+                ],
+                'ProductBrandOfferingIdentifier' => [
+                    'value'     => $catalogOfferingsIdentifierValue,
+                    'authority' => 'TVPT'
+                ],
+                'ProductIdentifier' => [
+                    [
+                        // Utilisation du jeton dynamique pour correspondre exactement à l'offre GDS
+                        'id'         => 'product_' . $productRef,
+                        'productRef' => 'product_' . $productRef,
+                        'Identifier' => [
+                            'value'     => $productRef, // Injecte "p2", "p3", "p4" ou "p5" selon le segment
+                            'authority' => 'TVPT'
                         ]
-                    ],
+                    ]
+                ],
+                'SegmentSequence' => [
+                    $index + 1
                 ]
-            ],
-            'Traveler' => $travelerList,
-            'PrimaryContact' => [
-                [
-                    '@type' => 'PrimaryContact',
-                    'id'    => 'pc_1',
+            ];
+        }
+
+        // Sécurité ultime si l'itinéraire est structurellement vide
+        if (empty($offeringSelection)) {
+            $fallbackProduct = $travelportData['products'][0] ?? 'p1';
+            $offeringSelection[] = [
+                '@type' => 'CatalogProductOfferingSelection',
+                'CatalogProductOfferingIdentifier' => [
+                    'id' => 'cpo_1',
                     'Identifier' => [
-                        'value'     => $gdsAuthorityValue,
-                        'authority' => 'TVPT',
+                        'value'     => $offeringId,
+                        'authority' => 'TVPT'
                     ],
-                    'Email' => [
-                        'value'     => $contactInfo['email'] ?? 'agence@creativtrips.com',
-                        'id'        => 'email_pc_1',
-                        'emailType' => 'FROM',
-                        'validInd'  => true,
-                    ],
-                    'Telephone' => [
-                        '@type'             => 'Telephone',
-                        'countryAccessCode' => '237',
-                        'phoneNumber'       => str_replace([' ', '+237'], '', $contactInfo['phone'] ?? ''),
-                        'role'              => 'Mobile',
-                    ],
+                    'CatalogProductOfferingRef' => 'cpo_1'
+                ],
+                'ProductBrandOfferingIdentifier' => [
+                    'value'     => $catalogOfferingsIdentifierValue,
+                    'authority' => 'TVPT'
+                ],
+                'ProductIdentifier' => [
+                    [
+                        'id'         => 'product_' . $fallbackProduct,
+                        'productRef' => 'product_' . $fallbackProduct,
+                        'Identifier' => [
+                            'value'     => $fallbackProduct,
+                            'authority' => 'TVPT'
+                        ]
+                    ]
                 ]
-            ],
-            'TravelAgency' => [
-                '@type'                => 'TravelAgencyDetail',
-                'id'                   => 'agency_1',
-                'TravelOrganizationRef' => 'TravelAgency_1',
-                'Identifier' => [
-                    'value'     => $gdsAuthorityValue,
-                    'authority' => 'TVPT',
+            ];
+        }
+
+        /**
+         * 4. ASSEMBLAGE DU PAYLOAD CONFORME À LA DOCUMENTATION V11
+         */
+        $payload = [
+            '@type' => 'OfferQueryBuildFromCatalogProductOfferings',
+
+            'BuildFromCatalogProductOfferingsRequest' => [
+                '@type' => 'BuildFromCatalogProductOfferingsRequestAir',
+
+                'CatalogProductOfferingsIdentifier' => [
+                    'id' => 'cpo_1',
+                    'Identifier' => [
+                        'value'     => $catalogOfferingsIdentifierValue,
+                        'authority' => 'TVPT'
+                    ]
                 ],
-                'organizationType' => 'TravelAgency',
-                'OrganizationName' => [
-                    'value'        => 'Creativ Solutions',
-                    'id'           => 'agency_name_1',
-                    'shortName'    => 'CreativTrips',
-                    'code'         => 'CT',
-                    'codeContext'  => 'ISO',
-                ],
+
+                'CatalogProductOfferingSelection' => $offeringSelection,
+                'PassengerCriteria'               => $passengerCriteria,
+                'FareRuleType'                    => 'Structured'
             ],
-            'autoDeleteDate' => now()->addHours(24)->format('Y-m-d'),
+
+            'PaymentCriteria' => [
+                '@type'                      => 'PaymentCriteria',
+                'IssuerIdentificationNumber' => '123456',
+                'PaymentCardCode'            => 'VI',
+                'agencyAccountInd'           => true,
+                'bspInd'                     => true,
+                'cashInd'                    => true,
+                'invoiceInd'                 => true
+            ],
+
+            'MaxNumberOfUpsellsToReturn' => 4
         ];
 
-        $url = rtrim($this->baseUrl, '/') . '/11/air/book/session/reservationworkbench';
-
-        Log::info('[Travelport] createReservationWorkbench → Request', [
-            'url'     => $url,
-            'payload' => $payload,
+        Log::info('Travelport AirPrice Request - Production Specs Matched', [
+            'session_id' => $reservationResourceIdentifier,
+            'payload'    => $payload
         ]);
 
-        try {
-            $response = Http::timeout(60)
-                ->withToken($token)
-                ->acceptJson()
-                ->withHeaders([
-                    'Accept-Encoding'              => 'gzip, deflate',
-                    'Content-Type'                 => 'application/json',
-                    'TVP-PCC-Core'                 => $this->pcc,
-                    'TraceId'                      => 'Workbench_' . time(),
-                    'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group,
-                ])
-                ->post($url, $payload);
-
-            Log::info('[Travelport] createReservationWorkbench → Response', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-
-            if (!$response->successful()) {
-                $json  = $response->json() ?? [];
-                $error = $json['errors'][0]['message']
-                    ?? $json['message']
-                    ?? "HTTP {$response->status()} — {$response->body()}";
-
-                throw new \RuntimeException(
-                    "createReservationWorkbench failed [{$response->status()}] : {$error}"
-                );
-            }
-
-            $data = $response->json() ?? [];
-
-            // Extraction du sessionIdentifier UUID retourné par Travelport
-            $sessionIdentifier = $data['ReservationResponse']['Reservation']['Identifier']['value']
-                ?? $data['Identifier']['value']
-                ?? $data['identifier']
-                ?? null;
-
-            if (!$sessionIdentifier) {
-                Log::error('[Travelport] sessionIdentifier absent', ['body' => $data]);
-                throw new \RuntimeException(
-                    'Travelport n\'a pas retourné de sessionIdentifier valide.'
-                );
-            }
-
-            Log::info('[Travelport] Workbench créé avec succès', [
-                'session_identifier' => $sessionIdentifier,
-            ]);
-
-            return $sessionIdentifier;
-
-        } catch (\RuntimeException $e) {
-            throw $e;
-
-        } catch (\Throwable $e) {
-            Log::error('[Travelport] createReservationWorkbench → Exception', [
-                'message' => $e->getMessage(),
-                'url'     => $url,
-            ]);
-
-            throw new \RuntimeException(
-                'Échec création Workbench Travelport : ' . $e->getMessage()
+        /**
+         * 5. ENVOI DE LA REQUÊTE HTTP
+         */
+        $response = Http::withToken($token)
+            ->withOptions([
+                'connect_timeout' => 15,
+                'timeout'         => 30,
+            ])
+            ->withHeaders([
+                'Accept-Encoding'                 => 'gzip, deflate',
+                'Content-Type'                    => 'application/json',
+                'TVP-PCC-Core'                    => $this->pcc,
+                'TraceId'                         => 'AirPrice_' . uniqid(),
+                'travelportPlusSessionIdentifier' => $reservationResourceIdentifier,
+                'XAUTH_TRAVELPORT_ACCESSGROUP'    => config('services.travelport.access_group'),
+                'TransactionId'                   => $transactionId
+            ])
+            ->post(
+                rtrim($this->baseUrl, '/') . '/11/air/price/offers/buildfromcatalogproductofferings',
+                $payload
             );
-        }
-    }
-    /**
-     * ÉTAPE 6 : Injecter le moyen de paiement
-     * PUT /11/air/book/reservationworkbench/{sessionIdentifier}/formofpayment
-     */
-/*    public function addFormOfPayment(string $sessionIdentifier, string $paymentMethod, ?string $phoneNumber = null): array
-    {
-        $token = $this->travelportService->getAccessToken();
 
-        // Mobile Money (MTN / Orange) → Cash Agency
-        $fop = match($paymentMethod) {
-        'momo', 'om' => [
-        '@type'            => 'FormOfPaymentCash',
-        'id'               => 'fop_1',
-        'FormOfPaymentRef' => 'fop_1',
-        'agencyAccountInd' => true,
-        'cashInd'          => true,
-    ],
-        'card' => [
-        '@type'            => 'FormOfPaymentPaymentCard',
-        'id'               => 'fop_1',
-        'FormOfPaymentRef' => 'fop_1',
-        'activeInd'        => true,
-    ],
-        default => throw new \InvalidArgumentException("Méthode de paiement inconnue : {$paymentMethod}"),
-    };
+        $responseData = $response->json();
 
-    $payload = ['FormOfPayment' => [$fop]];
-
-    $url = rtrim($this->baseUrl, '/') . "/11/air/book/reservationworkbench/{$sessionIdentifier}/formofpayment";
-
-    Log::info('[Travelport] addFormOfPayment → Request', [
-        'url'            => $url,
-        'payment_method' => $paymentMethod,
-        'payload'        => $payload,
-    ]);
-
-    $response = Http::timeout(60)
-        ->withToken($token)
-        ->acceptJson()
-        ->withHeaders([
-            'Content-Type'                    => 'application/json',
-            'TVP-PCC-Core'                    => $this->pcc,
-            'TraceId'                         => 'FOP_' . $sessionIdentifier . '_' . time(),
-            'XAUTH_TRAVELPORT_ACCESSGROUP'    => $this->access_group,
-            'travelportPlusSessionIdentifier' => $sessionIdentifier,
-        ])
-        ->put($url, $payload);
-
-    Log::info('[Travelport] addFormOfPayment → Response', [
-        'status' => $response->status(),
-        'body'   => $response->body(),
-    ]);
-
-    if (!$response->successful()) {
-        $json = $response->json() ?? [];
-        $error = $json['errors'][0]['message'] ?? $json['message'] ?? "HTTP {$response->status()}";
-        throw new \RuntimeException("addFormOfPayment failed : {$error}");
-    }
-
-    return $response->json() ?? [];
-}*/
-    /**
-     * ÉTAPE 8 : Commit final — génère le PNR
-     * POST /11/air/book/reservationworkbench/{sessionIdentifier}/commit
-     * @param string $sessionIdentifier
-     * @return array
-     */
-    public function commitReservation(string $sessionIdentifier): array
-    {
-        $token = $this->travelportService->getAccessToken();
-
-        $url = rtrim($this->baseUrl, '/') . "/11/air/book/reservationworkbench/{$sessionIdentifier}/commit";
-
-        Log::info('[Travelport] commitReservation → Request', [
-            'url'     => $url,
-            'session' => $sessionIdentifier,
+        Log::info('Travelport AirPrice Response', [
+            'http_status' => $response->status(),
+            'response'    => $responseData
         ]);
 
+        if ($response->failed()) {
+            Log::error('Travelport AirPrice HTTP Error', [
+                'status'   => $response->status(),
+                'response' => $responseData
+            ]);
+            throw new \Exception('Erreur de communication avec l\'API de tarification (' . $response->status() . ').');
+        }
+
+        /**
+         * 6. INTERCEPTION DES ERREURS MÉTIER DU GDS
+         */
+        $offerListResponse = $responseData['OfferListResponse'] ?? [];
+        $errors            = $offerListResponse['Result']['Error'] ?? [];
+
+        if (!empty($errors)) {
+            $message = $errors[0]['Message'] ?? 'Le tarif de l\'offre sélectionnée n\'est plus disponible.';
+            Log::error('Travelport AirPrice Business Error', [
+                'message'  => $message,
+                'response' => $responseData
+            ]);
+            throw new \Exception($message);
+        }
+
+        return [
+            'success'        => true,
+            'offering_id'    => $offeringId,
+            'transaction_id' => $transactionId,
+            'response'       => $responseData
+        ];
+    }
+
+
+    /**
+     * ÉTAPES F & J : Valide et scelle le Workbench (Commit).
+     *
+     * Selon la documentation :
+     * - Si AUCUN paiement n'a été injecté (Étape F) : Génère un PNR de hold.
+     * - Si UN paiement a été injecté via addPayment (Étape J) : Émet les billets et génère les numéros de tickets.
+     *
+     * @param string $sessionIdentifier L'identifiant de session du Workbench (Pre ou Post-Commit)
+     * @param string $bookingType Type d'action : 'hold' (Étape F) ou 'now' (Étape J)
+     * @return array Contient le PNR ('locatorCode') et la réponse brute
+     */
+    public function commitReservation(string $sessionIdentifier, string $bookingType = 'hold'): array
+    {
+        $token = $this->travelportService->getAccessToken();
+        $versionPath = "11"; // Utilisation du endpoint de base de la passerelle
+
+        // Endpoint de l'identifiant du workbench à commit
+        $url = rtrim($this->baseUrl, '/') . "/{$versionPath}/air/book/reservation/reservations/{$sessionIdentifier}";
+
+        // Calcul de la date de rétention de sécurité (J+3) requise par l'autoDeleteDate
+        $autoDeleteDate = now()->addDays(3)->format('Y-m-d');
+
+        // MAPPING STRUCTUREL DES QUERY PARAMETERS BASÉ SUR LA DOCUMENTATION
+        if ($bookingType === 'hold') {
+            // Étape F : Réservation brute (PNR sans paiement immédiat)
+            $queryParams = [
+                'autoDeleteDate' => $autoDeleteDate,
+                'DocumentValue'  => 'Retain',
+                'payLaterInd'    => 'true' // Renseigné à true car le paiement est délégué à plus tard
+            ];
+            // Note : On omet 'Issuance' ici car l'absence de paiement provoquera la création du PNR automatique.
+        } else {
+            // Étape J : Émission finale (Ticketing après addPayment)
+            $queryParams = [
+                'autoDeleteDate' => $autoDeleteDate,
+                'Issuance'       => 'Ticket', // L'Enum requis pour forcer le ticketing immédiat
+                'DocumentValue'  => 'Retain',
+                'payLaterInd'    => 'false'   // Le paiement vient d'être injecté à l'étape H/I
+            ];
+        }
+
+        $fullUrl = $url . '?' . http_build_query($queryParams);
+
+        // Payload par défaut exigé dans le corps (Body) de la requête POST pour signer l'acte
+        $payload = [
+            "scheduleChangeAcceptedInd"          => true,
+            "errorWhenOfferPriceCancelledInd"    => true,
+            "inhibitResidualDocumentIssuanceInd" => true,
+            "enableTwoStepCommitInd"             => false, // Traitement direct en une seule étape pour obtenir le ticket/PNR immédiatement
+            "overrideMCTInd"                     => true,
+            "errorWhenScheduleChangesInd"        => true,
+            "scheduleChangeReprice"              => "AcceptOfferPriceDifference",
+            "ReceivedFrom"                       => "GUENS TRAVEL", // Signature de l'agence (Max 11 caractères)
+            "errorWhenOfferPriceChangesInd"      => true
+        ];
+
+        Log::info("[Travelport] commitReservation [Mode: {$bookingType}] → Traitement du Commit", [
+            'url' => $fullUrl
+        ]);
+
+        // Exécution de la requête POST réglementaire
         $response = Http::timeout(120)
             ->withToken($token)
             ->acceptJson()
             ->withHeaders([
+                'Accept'                          => 'application/json;version=11.33', // Forçage de la version de mapping 11.33
+                'Accept-Encoding'                 => 'gzip, deflate',
                 'Content-Type'                    => 'application/json',
-                'TVP-PCC-Core'                    => $this->pcc,
-                'TraceId'                         => 'Commit_' . $sessionIdentifier . '_' . time(),
-                'XAUTH_TRAVELPORT_ACCESSGROUP'    => $this->access_group,
+                'TVP-PCC-Core'                    => !empty($this->pcc) ? trim($this->pcc) : 'DU7_1G',
+                'XAUTH_TRAVELPORT_ACCESSGROUP'    => trim($this->access_group),
                 'travelportPlusSessionIdentifier' => $sessionIdentifier,
+                'TraceId'                         => 'Commit_Req_' . $sessionIdentifier . '_' . time(),
             ])
-            ->post($url, []);
-
-        Log::info('[Travelport] commitReservation → Response', [
-            'status' => $response->status(),
-            'body'   => $response->body(),
-        ]);
+            ->post($fullUrl, $payload);
 
         if (!$response->successful()) {
-            $json  = $response->json() ?? [];
-            $error = $json['errors'][0]['message'] ?? $json['message'] ?? "HTTP {$response->status()}";
-            throw new \RuntimeException("commitReservation failed : {$error}");
+            Log::error("[Travelport] commitReservation [Mode: {$bookingType}] → Échec critique", [
+                'status' => $response->status(),
+                'body'   => $response->body()
+            ]);
+
+            $json = $response->json() ?? [];
+            $error = $json['errors'][0]['message'] ?? $json['message'] ?? "Erreur GDS Gateway {$response->status()}";
+            throw new \RuntimeException("Le Commit du Workbench a échoué ({$bookingType}) : {$error}");
         }
 
         $data = $response->json() ?? [];
 
-        // Extraction du PNR
+        // Extraction robuste du Code PNR (locatorCode) selon les variantes de structures de l'API v11
         $pnr = $data['Reservation']['locatorCode']
             ?? $data['ReservationResponse']['Reservation']['locatorCode']
+            ?? $data['ReservationDisplayResponse']['ReservationShort']['Identifier']['value']
             ?? null;
 
-        if (!$pnr) {
-            Log::warning('[Travelport] PNR absent de la réponse commit', ['body' => $data]);
-        }
+        Log::info("[Travelport] commitReservation [Mode: {$bookingType}] → Succès !", [
+            'pnr' => $pnr
+        ]);
 
         return [
-            'pnr'  => $pnr,
-            'raw'  => $data,
+            'pnr' => $pnr,
+            'raw' => $data
         ];
     }
-    /**
-     * ÉTAPE 9 : Émission des billets électroniques
-     * POST /11/air/ticket/reservation/{pnr}/products/ticket
-     */
-    public function issueTickets(string $pnr): array
+
+    public function createPostCommitWorkbench(string $pnr): array
     {
         $token = $this->travelportService->getAccessToken();
 
@@ -690,16 +501,99 @@ class FlightBookingService
 
         return $response->json() ?? [];
     }
-
     /**
-     * ÉTAPE 2.7 : Construire l'offre ferme et re-tarifer avant encaissement (Air Price)
-     * Endpoint GDS: POST /11/air/book/airoffer/reservationworkbench/{reservationResourceIdentifier}/offers/buildfromcatalogproductofferings
-     * @param string $reservationResourceIdentifier
-     * @param array $selectedFlight
-     * @return array
-     * @throws \Exception
+     * ÉTAPE G : Initialise un Post-Commit Workbench pour créer une session d'émission (Ticketing).
+     * Préréquis absolu avant toute transaction modifiant ou émettant un PNR existant.
+     *
+     * @param string $pnr Le code de réservation GDS (ex: ABC123)
+     * @param string $source Le système source qui a généré l'identifiant (Défaut: 'GDS')
+     * @return string Le nouveau jeton travelportPlusSessionIdentifier à utiliser pour injecter le paiement (Étape H/I)
+     * @throws \RuntimeException
      */
-    public function buildOfferFromCatalog(string $reservationResourceIdentifier, array $selectedFlight): array
+    public function createPostCommitWorkbench2(string $pnr, string $source = 'GDS'): string
+    {
+        $token = $this->travelportService->getAccessToken();
+        $versionPath = "11"; // Utilisation du endpoint de passerelle principale
+
+        // Nettoyage et validation stricte du format du Locator (Max 16 caractères, Alphanumérique Majuscule)
+        $cleanPnr = strtoupper(preg_replace('/[^A-Za-z0-9]/', '', trim($pnr)));
+        if (strlen($cleanPnr) > 16) {
+            throw new \InvalidArgumentException("Le code Locator (PNR) fourni dépasse la limite maximale de 16 caractères.");
+        }
+
+        // Endpoint officiel de construction de session à partir du localisateur de réservation
+        $url = rtrim($this->baseUrl, '/') . "/{$versionPath}/air/book/session/reservationworkbench/buildfromlocator";
+
+        // Application stricte des Query Parameters issus de la spécification
+        $queryParams = [
+            'Locator'                  => $cleanPnr,
+            'source'                   => substr($source, 0, 128), // Sécurité de troncature à 128 caractères
+            'detailViewInd'            => 'true', // Demande le retour de l'objet complet ReservationDetail
+            'viewBrandCompleteInfoInd' => 'true', // Inclus les métadonnées de la marque/classe tarifaire
+            'viewBaggageDetailInd'     => 'true'  // Inclus le détail complet des franchises bagages
+        ];
+
+        $fullUrl = $url . '?' . http_build_query($queryParams);
+
+        Log::info("[Travelport] createPostCommitWorkbench [Étape G] → Envoi", [
+            'pnr' => $cleanPnr,
+            'url' => $fullUrl
+        ]);
+
+        // Exécution de la requête POST (sans corps JSON, l'état initial étant forgé par les paramètres d'URL)
+        $response = Http::timeout(90)
+            ->withToken($token)
+            ->acceptJson()
+            ->withHeaders([
+                'Accept'                       => 'application/json;version=11.33', // Exige le schéma v11.33 pour le mapping
+                'Accept-Encoding'              => 'gzip, deflate',
+                'TVP-PCC-Core'                 => !empty($this->pcc) ? trim($this->pcc) : 'DU7_1G',
+                'XAUTH_TRAVELPORT_ACCESSGROUP' => trim($this->access_group),
+                'TraceId'                      => 'PostCommit_Build_' . $cleanPnr . '_' . time(),
+            ])
+            ->post($fullUrl);
+
+        // Capture des échecs de routage ou de validation métier
+        if (!$response->successful()) {
+            Log::error("[Travelport] createPostCommitWorkbench [Étape G] → Échec de l'initialisation", [
+                'pnr'    => $cleanPnr,
+                'status' => $response->status(),
+                'body'   => $response->body()
+            ]);
+
+            $json = $response->json() ?? [];
+            $error = $json['errors'][0]['message'] ?? $json['message'] ?? "HTTP Status {$response->status()} - Bad Request";
+            throw new \RuntimeException("Impossible d'initier le Post-Commit Workbench pour le PNR {$cleanPnr}: {$error}");
+        }
+
+        // Extraction du jeton de session dans les en-têtes retournés (Spécificité de l'API Gateway de Travelport)
+        $headers = $response->headers();
+        $postCommitSessionToken = $headers['travelportPlusSessionIdentifier'][0]
+            ?? $headers['travelportplussessionidentifier'][0]
+            ?? null;
+
+        // Alternative de repli : Recherche de l'identifiant directement dans le corps de réponse JSON
+        if (!$postCommitSessionToken) {
+            $data = $response->json() ?? [];
+            $postCommitSessionToken = $data['ReservationWorkbench']['sessionIdentifier']
+                ?? $data['sessionIdentifier']
+                ?? null;
+        }
+
+        // Si aucune session n'est explicitement renvoyée, on lève une exception pour empêcher la rupture silencieuse du flux
+        if (!$postCommitSessionToken) {
+            throw new \RuntimeException("Le GDS a validé la réouverture mais n'a retourné aucun jeton de session 'travelportPlusSessionIdentifier' valide.");
+        }
+
+        Log::info("[Travelport] createPostCommitWorkbench [Étape G] → Session Initiée avec Succès", [
+            'pnr'               => $cleanPnr,
+            'allocated_session' => $postCommitSessionToken
+        ]);
+
+        return $postCommitSessionToken;
+    }
+
+    public function addOfferToWorkbench(string $reservationResourceIdentifier, array $selectedFlight): array
     {
         $token = $this->travelportService->getAccessToken();
 
@@ -769,7 +663,7 @@ class FlightBookingService
                 'Content-Type' => 'application/json',
                 'TVP-PCC-Core' => $this->pcc,
                 'TraceId' => 'BuildOffer_' . uniqid(),
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => env('TRAVELPORT_ACCESS_GROUP', '19Y88702-C27A-4E5D-829A-89D7016688B1'),
+                'XAUTH_TRAVELPORT_ACCESSGROUP' => config('services.travelport.access_group', '19Y88702-C27A-4E5D-829A-89D7016688B1'),
                 'travelportPlusSessionIdentifier' => $reservationResourceIdentifier
             ])
             ->post($this->baseUrl . "11/air/book/airoffer/reservationworkbench/{$reservationResourceIdentifier}/offers/buildfromcatalogproductofferings", $payload);
@@ -785,490 +679,121 @@ class FlightBookingService
         return $response->json();
     }
 
-    /**
-     * ÉTAPE 3 : Création finale de la réservation (Génération du PNR)
-     * Endpoint GDS: POST /11/air/book/reservation/reservations/build
-     * @param string $sessionIdentifier
-     * @param array $passengersData
-     * @param array $selectedFlight
-     * @return array
-     * @throws \Exception
-     */
-    public function buildReservation(string $sessionIdentifier, array $passengersData, array $selectedFlight): array
-    {
-        $token = $this->travelportService->getAccessToken();
-
-        // Formatage des voyageurs selon la structure Travelport+
-        $travelers = [];
-        foreach ($passengersData as $index => $passenger) {
-            $travelers[] = [
-                "@type" => "Traveler",
-                "id" => "traveler_" . ($index + 1),
-                "TravelerRef" => "t" . ($index + 1),
-                "Identifier" => [
-                    "value" => $selectedFlight['gds_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E',
-                    "authority" => "TVPT"
-                ]
-            ];
-        }
-
-        // Payload standardisé pour l'émission/booking direct
-        $payload = [
-            "ReservationQueryBuild" => [
-                "@type" => "ReservationQueryBuild",
-                "ReservationBuild" => [
-                    "@type" => "ReservationBuildFromProducts",
-                    "autoDeleteDate" => now()->addDays(1)->format('Y-m-d'), // Annulation auto si non émis sous 24h
-                    "receivedFrom" => "CREATIV_API",
-                    "issuance" => "Ticket",
-                    "Traveler" => $travelers,
-                    "FormOfPayment" => [
-                        [
-                            "@type" => "FormOfPaymentPaymentCard",
-                            "id" => "fop_1",
-                            "FormOfPaymentRef" => "fop_1",
-                            "Identifier" => [
-                                "value" => $selectedFlight['gds_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E',
-                                "authority" => "TVPT"
-                            ],
-                            "activeInd" => true
-                        ]
-                    ],
-                    "PrimaryContact" => [
-                        [
-                            "@type" => "PrimaryContact",
-                            "id" => "pc_1",
-                            "Identifier" => [
-                                "value" => $selectedFlight['gds_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E',
-                                "authority" => "TVPT"
-                            ]
-                        ]
-                    ],
-                    "TravelAgency" => [
-                        "@type" => "TravelAgencyDetail",
-                        "id" => "agency_1",
-                        "TravelOrganizationRef" => "TravelAgency_1",
-                        "Identifier" => [
-                            "value" => $selectedFlight['gds_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E',
-                            "authority" => "TVPT"
-                        ],
-                        "organizationType" => "TravelAgency",
-                        "OrganizationName" => [
-                            "value" => "Creativ Solutions",
-                            "id" => "agency_name_1",
-                            "shortName" => "CreativTrips",
-                            "code" => "CT",
-                            "codeContext" => "ISO"
-                        ]
-                    ],
-                    "scheduleChangeAcceptedInd" => true,
-                    "overrideMCTInd" => true,
-                    "errorWhenScheduleChangesInd" => true,
-                    "errorWhenOfferPriceChangesInd" => true
-                ]
-            ]
-        ];
-
-        $response = Http::withToken($token)
-            ->withHeaders([
-                'Accept-Encoding' => 'gzip, deflate',
-                'Content-Type' => 'application/json',
-                'TVP-PCC-Core' => $this->pcc,
-                'TraceId' => 'BuildReservation_' . uniqid(),
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => env('TRAVELPORT_ACCESS_GROUP', '19Y88702-C27A-4E5D-829A-89D7016688B1'),
-                'travelportPlusSessionIdentifier' => $sessionIdentifier
-            ])
-            ->post($this->baseUrl . "11/air/book/reservation/reservations/build", $payload);
-
-        if ($response->failed()) {
-            Log::critical('Travelport Reservation Build Failed after Payment', [
-                'session' => $sessionIdentifier,
-                'body' => $response->body()
-            ]);
-            throw new \Exception('Le paiement a été perçu, mais la création du PNR a échoué. Notre support technique a été alerté.');
-        }
-
-        return $response->json();
-    }
-
-    /**
-     * ÉTAPE 2.8 : Construire et tarifer l'offre à partir des produits du Workbench (Air Price alternatif)
-     * Endpoint GDS: POST /11/air/book/airoffer/reservationworkbench/{reservationResourceIdentifier}/offers/buildfromproducts
-     * @param string $reservationResourceIdentifier
-     * @return array
-     * @throws \Exception
-     */
-    public function buildOfferFromProducts(string $reservationResourceIdentifier): array
-    {
-        $token = $this->travelportService->getAccessToken();
-
-        // payload normalisé, propre et débarrassé des dysfonctionnements de guillemets
-        $payload = [
-            "OfferQueryBuildFromProducts" => [
-                "@type" => "OfferQueryBuildFromProducts",
-                "BuildFromProductsRequest" => [
-                    "@type" => "BuildFromProductsRequestAir"
-                ],
-                "CabinPreference" => [
-                    "@type" => "CabinPreference",
-                    "preferenceType" => "Preferred",
-                    "cabins" => ["Economy"],
-                    "legSequence" => [1, 2]
-                ],
-                "PaymentCriteria" => [
-                    "@type" => "PaymentCriteria",
-                    // Configuration requise pour la collecte des fonds locale (Momo/Orange Money)
-                    "agencyAccountInd" => true,
-                    "bspInd" => true,
-                    "cashInd" => true,
-                    "invoiceInd" => true
-                ],
-                "FareRuleType" => "Structured",
-                "FareRuleCategory" => [
-                    "AdvanceReservationsTicketing"
-                ],
-                "lowFareFinderInd" => true,
-                "returnBrandedFaresInd" => true,
-                "reCheckInventoryInd" => true, // Sécurité : Forcer la vérification de l'état des sièges
-                "validateInventoryInd" => true, // Sécurité : Valider l'inventaire auprès de la compagnie
-                "MaxNumberOfUpsellsToReturn" => 4
-            ]
-        ];
-
-        // Appel unifié avec le client HTTP de Laravel
-        $response = Http::withToken($token)
-            ->withHeaders([
-                'Accept-Encoding' => 'gzip, deflate',
-                'Content-Type' => 'application/json',
-                'TVP-PCC-Core' => $this->pcc,
-                'TraceId' => 'BuildFromProd_' . uniqid(),
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => env('TRAVELPORT_ACCESS_GROUP', '19Y88702-C27A-4E5D-829A-89D7016688B1'),
-                'travelportPlusSessionIdentifier' => $reservationResourceIdentifier
-            ])
-            ->post($this->baseUrl . "11/air/book/airoffer/reservationworkbench/{$reservationResourceIdentifier}/offers/buildfromproducts", $payload);
-
-        if ($response->failed()) {
-            Log::error('Travelport Offer Build From Products Failed', [
-                'resource_id' => $reservationResourceIdentifier,
-                'body' => $response->body()
-            ]);
-            throw new \Exception('Impossible de valider et tarifer les segments sélectionnés auprès du GDS.');
-        }
-
-        return $response->json();
-    }
-
-    /**
-     * ÉTAPE 2.6 : Injecter les informations détaillées des passagers (APIS/Passeport/Contact)
-     * Endpoint GDS: POST /11/air/book/traveler/reservationworkbench/{reservationResourceIdentifier}/travelers/list
-     * @param string $reservationResourceIdentifier
-     * @param array $passengers
-     * @param array $contactInfo
-     * @param array $selectedFlight
-     * @return array
-     * @throws \Exception
-     */
-    /**
-     * ÉTAPE 5 : Injecter tous les passagers en un seul appel
-     * POST /11/air/book/traveler/reservationworkbench/{sessionIdentifier}/travelers/list
-     * @param string $sessionIdentifier
-     * @param array $passengers
-     * @param array $contactInfo
-     * @param array $selectedFlight
-     * @return array
-     * @throws \Exception
-     */
-
-/*    public function addTravelersToWorkbench(
-        string $sessionIdentifier,
-        array $passengers,
-        array $contactInfo,
-        array $selectedFlight
-    ): array {
-
-        $token = $this->travelportService->getAccessToken();
-
-        // Récupération de l'identifiant GDS ou valeur par défaut du curl
-        $gdsAuthorityValue = $selectedFlight['gds_authority_value']
-            ?? 'A0656EFF-FAF4-456F-B061-0161008D7C4E';
-
-        $travelers = [];
-
-        foreach ($passengers as $index => $passenger) {
-            $travelerNumber = $index + 1;
-
-            // Validation de la date de naissance
-            if (empty($passenger['birth_date'])) {
-                throw new \InvalidArgumentException("La date de naissance est obligatoire pour le passager {$travelerNumber}");
-            }
-
-            $birthDate = new \DateTime($passenger['birth_date']);
-            if ($birthDate >= new \DateTime('today')) {
-                throw new \InvalidArgumentException("Date de naissance invalide pour le passager {$travelerNumber}");
-            }
-
-            if (empty($passenger['passport_number'])) {
-                throw new \InvalidArgumentException("Passeport obligatoire pour le passager {$travelerNumber}");
-            }
-
-            // Calcul exact de l'âge
-            $age = $birthDate->diff(new \DateTime())->y;
-
-            // Détermination du Passenger Type Code (PTC)
-            $ptc = match (true) {
-            $age < 2 => 'INF',
-            $age < 12 => 'CHD',
-            default => 'ADT'
-        };
-
-        // Civilité & Genre
-        $prefix = ($passenger['civility'] ?? 'M.') === 'Mme' ? 'Mrs' : 'Mr';
-        $gender = $prefix === 'Mr' ? 'Male' : 'Female';
-        $nationality = $passenger['nationality'] ?? 'CM';
-
-        // Nettoyage et formatage du numéro de téléphone
-        $cleanPhone = preg_replace('/[^0-9]/', '', str_replace('+237', '', $contactInfo['phone'] ?? ''));
-
-        $travelers[] = [
-            '@type' => 'Traveler',
-            'id' => "traveler_{$travelerNumber}",
-            'TravelerRef' => "t{$travelerNumber}",
-            'Identifier' => [
-                'value' => $gdsAuthorityValue,
-                'authority' => 'TVPT',
-            ],
-            'birthDate' => $passenger['birth_date'],
-            'gender' => $gender,
-            'nationality' => $nationality,
-            'PersonName' => [
-                '@type' => 'PersonNameDetail',
-                'Prefix' => $prefix,
-                'Given' => strtoupper($passenger['first_name']),
-                'Surname' => strtoupper($passenger['last_name']),
-            ],
-            'Address' => [[
-                '@type' => 'AddressDetail',
-                'id' => "Address_{$travelerNumber}",
-                'BldgRoom' => [
-                    'value' => $passenger['address_building'] ?? 'Immeuble',
-                    'buldingInd' => true
-                ],
-                'Number' => [
-                    'value' => $passenger['address_number'] ?? '123',
-                ],
-                'Street' => $passenger['address_street'] ?? 'Rue Non Renseignée',
-                'AddressLine' => [
-                    $passenger['address_line'] ?? 'Douala Cameroun'
-                ],
-                'City' => $passenger['address_city'] ?? 'Douala',
-                'County' => $passenger['address_county'] ?? 'Littoral',
-                'StateProv' => [
-                    'value' => $passenger['address_state_code'] ?? 'LT',
-                    'name' => $passenger['address_state_name'] ?? 'Littoral'
-                ],
-                'Country' => [
-                    'value' => $passenger['address_country_code'] ?? 'CM',
-                    'name' => $passenger['address_country_name'] ?? 'Cameroun',
-                    'codeContext' => 'IATA'
-                ],
-                'PostalCode' => $passenger['address_postal_code'] ?? '00237',
-                'Addressee' => strtoupper($passenger['last_name']) . ' ' . strtoupper($passenger['first_name']),
-                'role' => 'Business'
-            ]],
-            'Telephone' => [[
-                '@type' => 'Telephone',
-                'countryAccessCode' => '237',
-                'areaCityCode' => $passenger['phone_area_code'] ?? '972', // Requis par l'API
-                'phoneNumber' => $cleanPhone,
-                'cityCode' => 'DLA',
-                'role' => 'Mobile'
-            ]],
-            'Email' => [[
-                'value' => $contactInfo['email'] ?? 'agence@creativtrips.com',
-                'id' => "email_{$travelerNumber}",
-                'emailType' => 'FROM',
-                'validInd' => true
-            ]],
-            'passengerTypeCode' => $ptc,
-            'age' => (int) $age,
-            'TravelDocument' => [[
-                '@type' => 'TravelDocumentDetail',
-                'id' => "doc_{$travelerNumber}",
-                'docNumber' => strtoupper($passenger['passport_number']),
-                'docType' => 'Passport',
-                // Utilisation des vraies dates du passager si disponibles, sinon fallback
-                'issueDate' => $passenger['passport_issue_date'] ?? now()->subYears(2)->format('Y-m-d'),
-                'expireDate' => $passenger['passport_expire_date'] ?? now()->addYears(3)->format('Y-m-d'),
-                'issueCountry' => $nationality,
-                'birthCountry' => $passenger['birth_country'] ?? $nationality,
-                'birthDate' => $passenger['birth_date'],
-                'Gender' => $gender,
-                'Nationality' => $nationality,
-                'PersonName' => [
-                    '@type' => 'PersonNameDetail',
-                    'Prefix' => $prefix,
-                    'Given' => strtoupper($passenger['first_name']),
-                    'Surname' => strtoupper($passenger['last_name']),
-                ]
-            ]]
-        ];
-    }
-
-        $payload = [
-            'Traveler' => $travelers
-        ];
-
-        $url = rtrim($this->baseUrl, '/')
-            . "/11/air/book/traveler/reservationworkbench/{$sessionIdentifier}/travelers/list";
-
-        Log::info('Travelport Add Travelers Request', [
-            'url' => $url,
-            'sessionIdentifier' => $sessionIdentifier,
-            'payload' => $payload
-        ]);
-
-        // Envoi de la requête avec les headers du Curl
-        $response = Http::timeout(60)
-            ->withToken($token)
-            ->acceptJson()
-            ->withHeaders([
-                'Accept-Encoding' => 'gzip, deflate',
-                'Content-Type' => 'application/json',
-                'TVP-PCC-Core' => $this->pcc ?? 'DU7_1G',
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group ?? '19Y88702-C27A-4E5D-829A-89D7016688B1',
-                'travelportPlusSessionIdentifier' => $sessionIdentifier,
-                'TraceId' => 'TraceID_' . time() . '_' . uniqid(),
-            ])
-            ->post($url, $payload);
-
-        Log::info('Travelport Add Travelers Response', [
-            'status' => $response->status(),
-            'body' => $response,
-        ]);
-
-        if (!$response->successful()) {
-            $error = $response->json()['errors'][0]['message']
-                ?? $response->json()['message']
-                ?? $response->body();
-
-            throw new \RuntimeException("Travelport Error [{$response->status()}] : {$error}");
-        }
-
-        $data = $response->json();
-        $root = $data['TravelerListResponse'] ?? [];
-
-        return [
-            'status' => $root['reservationStatus'] ?? null,
-            'transactionId' => $root['transactionId'] ?? null,
-            'travelerIds' => $root['TravelerID'] ?? [],
-            'raw' => $data
-        ];
-    }*/
 
     public function addTravelersToWorkbench(
         string $sessionIdentifier,
         array $passengers,
-        array $contactInfo,
         array $selectedFlight
     ): array {
-
         $token = $this->travelportService->getAccessToken();
         $version = '11';
 
         $url = rtrim($this->baseUrl, '/')
             . "/{$version}/air/book/traveler/reservationworkbench/{$sessionIdentifier}/travelers";
 
-        // Tableau pour stocker les réponses de chaque passager
         $responses = [];
 
         foreach ($passengers as $index => $passenger) {
             $travelerNumber = $index + 1;
 
-            // Détermination du genre
-            $gender = ($passenger['gender'] ?? 'Male') === 'Female' ? 'Female' : 'Male';
+            // 1. FORMATAGE STRICT DES DATES (Format attendu par Travelport : YYYY-MM-DD)
+            // Convertit les formats avec timestamp/ISO (ex: 2000-11-12T00:00:00.000000Z) en chaînes propres
+            $formattedBirthDate = date('Y-m-d', strtotime($passenger['birth_date'] ?? '1990-01-01'));
+            $formattedExpiryDate = date('Y-m-d', strtotime($passenger['passport_expiry'] ?? now()->addYears(3)->format('Y-m-d')));
 
-            // Payload pour UN SEUL voyageur
+            // Détermination du genre selon les civilités standard (M. / Mme) reçues du front
+            $gender = (isset($passenger['title']) && $passenger['title'] === 'Mme') ? 'Female' : 'Male';
+
+            // Nettoyage et formatage du numéro de téléphone
+            $rawPhone = $passenger['phone'] ?? '670000000';
+            $cleanPhone = preg_replace('/[^0-9]/', '', $rawPhone);
+
+            // 2. PAYLOAD NETTOYÉ ET STRIPPE DES REDONDANCES CONFLITIELLES
             $singleTravelerPayload = [
-                '@type' => 'Traveler',
-                'gender' => $gender,
-                'birthDate' => $passenger['birth_date'] ?? '1986-11-11',
-                'id' => "trav_{$travelerNumber}",
-                'passengerTypeCode' => $passenger['passenger_type_code'] ?? 'ADT',
+                '@type'             => 'Traveler',
+                'gender'            => $gender,
+                'birthDate'         => $formattedBirthDate, // 🟢 Corrigé : Format YYYY-MM-DD strict
+                'id'                => "trav_{$travelerNumber}",
+                'passengerTypeCode' => $passenger['passenger_type'] ?? 'ADT', // ADT, CHD, INF
 
                 'PersonName' => [
-                    '@type' => 'PersonNameDetail',
-                    'Given' => $passenger['first_name'] ?? 'TestFirst',
-                    'Surname' => $passenger['last_name'] ?? 'TestLast'
+                    '@type'   => 'PersonNameDetail',
+                    'Given'   => trim($passenger['first_name'] ?? 'Inconnu'),
+                    'Surname' => trim($passenger['last_name'] ?? 'Client')
                 ],
 
-                'Telephone' => [[
-                    '@type' => 'Telephone',
-                    'countryAccessCode' => $contactInfo['country_access_code'] ?? '1',
-                    'phoneNumber' => preg_replace('/[^0-9]/', '', $contactInfo['phone'] ?? '212456121'),
-                    'id' => "4",
-                    'cityCode' => $contactInfo['city_code'] ?? 'ORD',
-                    'role' => 'Home'
-                ]],
-
-                'Email' => [[
-                    'value' => $passenger['email'] ?? $contactInfo['email'] ?? 'TravelerOne@gmail.com'
-                ]],
-
-                'TravelDocument' => [[
-                    '@type' => 'TravelDocumentDetail',
-                    'docNumber' => strtoupper($passenger['passport_number'] ?? 'A123123'),
-                    'docType' => 'Passport',
-                    'expireDate' => $passenger['passport_expire_date'] ?? '2029-01-01',
-                    'issueCountry' => $passenger['passport_issue_country'] ?? 'CM',
-                    'birthDate' => $passenger['birth_date'] ?? '1986-11-11',
-                    'Gender' => $gender,
-
-                    'PersonName' => [
-                        '@type' => 'PersonName',
-                        'Given' => $passenger['first_name'] ?? 'TestFirst',
-                        'Surname' => $passenger['last_name'] ?? 'TestLast'
+                'Telephone' => [
+                    [
+                        '@type'             => 'Telephone',
+                        'countryAccessCode' => '237', // Code pays par défaut (Cameroun)
+                        'phoneNumber'       => $cleanPhone,
+                        'id'                => "tel_{$travelerNumber}",
+                        'cityCode'          => 'DLA',
+                        'role'              => 'Mobile'
                     ]
-                ]]
+                ],
+
+                'Email' => [
+                    [
+                        'value' => trim($passenger['email'] ?? 'traveler' . $travelerNumber . '@guens.org')
+                    ]
+                ],
+
+                'TravelDocument' => [
+                    [
+                        '@type'        => 'TravelDocumentDetail',
+                        'docNumber'    => strtoupper(trim($passenger['passport_number'] ?? 'N0000000')),
+                        'docType'      => 'Passport',
+                        'expireDate'   => $formattedExpiryDate, // 🟢 Corrigé : Format YYYY-MM-DD strict
+                        'issueCountry' => strtoupper($passenger['passport_issue_country'] ?? 'CM'),
+                        'birthDate'    => $formattedBirthDate,  // 🟢 Corrigé : Format YYYY-MM-DD strict
+                        'Gender'       => $gender
+                        // 🟢 Supprimé : Le sous-bloc PersonName d'ici qui causait la 500 sur api.pp.travelport.net
+                    ]
+                ]
             ];
 
-            // Log de la requête courante
-            Log::info("Travelport Add Traveler #{$travelerNumber} Request", [
-                'url' => $url,
+            Log::info("[Travelport] Add Traveler #{$travelerNumber} → Request", [
+                'url'     => $url,
                 'payload' => $singleTravelerPayload
             ]);
 
-            // Envoi de la requête HTTP pour CE passager
             $response = Http::timeout(60)
                 ->withToken($token)
                 ->acceptJson()
                 ->withHeaders([
-                    'Accept-Encoding' => 'gzip, deflate',
-                    'Content-Type' => 'application/json',
-                    'TVP-PCC-Core' => $this->pcc ?? 'DU7_1G',
-                    'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group ?? '19Y88702-C27A-4E5D-829A-89D7016688B1',
+                    'Accept-Encoding'                 => 'gzip, deflate',
+                    'Content-Type'                    => 'application/json',
+                    'TVP-PCC-Core'                    => !empty($this->pcc) ? $this->pcc : 'DU7_1G',
+                    'XAUTH_TRAVELPORT_ACCESSGROUP'    => $this->access_group,
                     'travelportPlusSessionIdentifier' => $sessionIdentifier,
-                    'TraceId' => 'TraceID_' . time() . '_' . $travelerNumber,
+                    'TraceId'                         => 'AddTrav_' . $sessionIdentifier . '_' . $travelerNumber,
                 ])
                 ->post($url, $singleTravelerPayload);
 
-            // Vérification du succès de la requête individuelle
             if (!$response->successful()) {
-                $error = $response->json()['errors'][0]['message'] ?? $response->body();
-                throw new \RuntimeException("Travelport Error on Passenger #{$travelerNumber} [{$response->status()}]: {$error}");
+                $json  = $response->json() ?? [];
+                $error = $json['errors'][0]['message'] ?? $json['message'] ?? $response->body();
+
+                Log::error("[Travelport] Erreur Add Traveler #{$travelerNumber}", [
+                    'status' => $response->status(),
+                    'body'   => $json
+                ]);
+
+                throw new \RuntimeException("Travelport Error on Passenger #{$travelerNumber} : {$error}");
             }
 
-            // On accumule la réponse réussie
             $responses[] = $response->json();
         }
 
-        // Retourne l'ensemble des réponses des passagers ajoutés
         return $responses;
     }
-    public function addFormOfPayment(string $sessionIdentifier, array $paymentData): array
+
+    public function addFormOfPayment(string $sessionIdentifier, array $paymentData,array $selectedFlight): array
     {
         $token = $this->travelportService->getAccessToken();
         $version = '11'; // Modifiez selon votre version d'API
-
+        $travelportData = $selectedFlight['travelport'] ?? [];
         $url = rtrim($this->baseUrl, '/')
             . "/{$version}/air/payment/reservationworkbench/{$sessionIdentifier}/formofpayment";
 
@@ -1279,7 +804,7 @@ class FlightBookingService
             "FormOfPaymentRef" => "formOfPayment_1",
             "Identifier" => [
                 "authority" => "Travelport",
-                "value" => "A0656EFF-FAF4-456F-B061-0161008D6FOP"
+                "value" => $travelportData['gds_authority_value']
             ],
             "PaymentCard" => [
                 "@type" => "PaymentCardDetail",
@@ -1317,6 +842,7 @@ class FlightBookingService
 
         return $response->json();
     }
+
     public function addPayment(
         string $sessionIdentifier,
         float $totalPrice,
@@ -1324,64 +850,102 @@ class FlightBookingService
         array $selectedFlight
     ): array {
         $token = $this->travelportService->getAccessToken();
-        $version = '11';
 
-        $url = rtrim($this->baseUrl, '/')
-            . "/{$version}/air/paymentoffer/reservationworkbench/{$sessionIdentifier}/payments";
+        if (empty($token)) {
+            throw new \RuntimeException('Impossible d’obtenir le token d’accès Travelport.');
+        }
 
-        // Récupération des informations de l'offre (généralement reçues lors du re-pricing/build offer)
-        $offerId = $selectedFlight['offer_id'] ?? 'offer_1';
-        $authority = $selectedFlight['offer_authority'] ?? 'Travelport';
-        $authorityValue = $selectedFlight['offer_authority_value'] ?? 'A0656EFF-FAF4-456F-B061-0161008D6A5E';
+        $travelportData = $selectedFlight['travelport'] ?? [];
 
+        /**
+         * 1. EXTRACTION DYNAMIQUE DES IDENTIFIANTS DU PAIEMENT (Alignée sur ton JSON réel)
+         */
+        // Récupère "o2" depuis ton payload réel
+        $offeringId = $travelportData['offering_id'] ?? $selectedFlight['offering_id'] ?? 'o1';
+
+        // Autorité GDS (ex: "c32724e4-7fce-4133-9c53-ec2a8341f42e")
+        $authority = $travelportData['gds_authority_value'] ?? 'TVPT';
+
+        // Hash du catalogue parent (ex: "c32724e4-7fce-4133-9c53-ec2a8341f42e")
+        $catalogIdentifier = $travelportData['catalog_offerings_identifier'] ?? $authority;
+
+        /**
+         * 2. RECONSTRUCTION DU PAYLOAD CONFORME TRAVELPORT RESERVATION WORKBENCH
+         */
         $payload = [
             "@type" => "Payment",
-            "id" => "payment_1",
+            "id"    => "payment_1",
             "Identifier" => [
                 "authority" => "Travelport",
-                "value" => "A0656EFF-FAF4-456F-B061-0161008D6A5E"
+                "value"     => $catalogIdentifier
             ],
             "Amount" => [
-                "code" => $currencyCode, // ex: "XAF", "EUR", "USD"
-                "minorUnit" => 2,
+                "code"           => strtoupper($currencyCode), // Assure le format ISO majuscule
+                "minorUnit"      => 2,
                 "currencySource" => "Charged",
-                "value" => (float) $totalPrice
+                "value"          => (float) $totalPrice
             ],
             "FormOfPaymentIdentifier" => [
-                "id" => "formOfPayment_1",
-                "FormOfPaymentRef" => "formOfPayment_1",
+                "id"                => "formOfPayment_1",
+                "FormOfPaymentRef"  => "formOfPayment_1",
                 "Identifier" => [
                     "authority" => "Travelport",
-                    "value" => "A0656EFF-FAF4-456F-B061-0161008D6FOP"
+                    "value"     => "A0656EFF-FAF4-456F-B061-0161008D6FOP" // Identifiant FOP sandbox par défaut
                 ]
             ],
-            "OfferIdentifier" => [[
-                "id" => $offerId,
-                "offerRef" => $offerId,
-                "Identifier" => [
-                    "authority" => $authority,
-                    "value" => $authorityValue
+            "OfferIdentifier" => [
+                [
+                    "id"       => "offer_" . $offeringId,
+                    "offerRef" => "offer_" . $offeringId,
+                    "Identifier" => [
+                        "authority" => "Travelport",
+                        "value"     => $offeringId // Cible "o2"
+                    ]
                 ]
-            ]]
+            ]
         ];
 
-        $response = Http::timeout(60)
+        Log::info('Travelport AddPayment Request', [
+            'session_id' => $sessionIdentifier,
+            'url_params' => ['offering_id' => $offeringId, 'catalog_id' => $catalogIdentifier],
+            'payload'    => $payload
+        ]);
+
+        /**
+         * 3. ENVOI DE LA REQUÊTE AU WORKBENCH
+         */
+        $url = rtrim($this->baseUrl, '/') . "/11/air/paymentoffer/reservationworkbench/{$sessionIdentifier}/payments";
+
+        logger('pccc'.$this->pcc);
+        $response = Http::timeout(45)
             ->withToken($token)
             ->acceptJson()
             ->withHeaders([
-                'Content-Type' => 'application/json',
-                'TVP-PCC-Core' => $this->pcc ?? 'DU7_1G',
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->access_group ?? '19Y88702-C27A-4E5D-829A-89D7016688B1',
+                'Content-Type'                    => 'application/json',
+                'TVP-PCC-Core' =>'DU7_1G',
+                'XAUTH_TRAVELPORT_ACCESSGROUP'    => config('services.travelport.access_group'),
                 'travelportPlusSessionIdentifier' => $sessionIdentifier,
-                'TraceId' => 'TraceID_PAY_' . time(),
+                'TraceId'                         => 'TraceID_PAY_' . uniqid(),
+                //'TransactionId'                   => $travelportData['transaction_id'] ?? null
             ])
             ->post($url, $payload);
 
+        $responseData = $response->json();
+
+        Log::info('Travelport AddPayment Response', [
+            'status'   => $response->status(),
+            'response' => $responseData
+        ]);
+
         if (!$response->successful()) {
-            $error = $response->json()['errors'][0]['message'] ?? $response->body();
-            throw new \RuntimeException("Travelport Payment Error [{$response->status()}]: {$error}");
+            // Extraction de l'erreur imbriquée propre au schéma GDS
+            $error = $responseData['errors'][0]['message']
+                ?? $responseData['ReservationDisplayResponse']['Result']['Error'][0]['Message']
+                ?? $response->body();
+
+            throw new \RuntimeException("Erreur lors de l'application du paiement Travelport : {$error}");
         }
 
-        return $response->json();
+        return $responseData;
     }
 }

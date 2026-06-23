@@ -1,22 +1,22 @@
 <?php
 
-namespace App\Http\Events;
+namespace App\Events;
 
-use App\Models\Booking;
+use App\Models\Withdrawal;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class BookingConfirmed
+class WithdrawalRequested
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
     /**
      * Crée une nouvelle instance d'événement.
-     * * En utilisant la promotion de propriété de PHP 8+, la propriété $booking
-     * est automatiquement déclarée et assignée en une seule ligne.
+     * * Grâce à la promotion de propriété de PHP 8+, la variable $withdrawal
+     * est déclarée et injectée automatiquement en une seule ligne.
      */
     public function __construct(
-        public Booking $booking
+        public Withdrawal $withdrawal
     ) {}
 }

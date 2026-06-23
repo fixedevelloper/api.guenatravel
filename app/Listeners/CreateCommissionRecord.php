@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Listeners;
+namespace App\Listeners;
 
 use App\Events\BookingConfirmed; // Ajustez le namespace selon votre classe BookingConfirmed
 use App\Models\Commission;

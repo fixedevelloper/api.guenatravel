@@ -3,7 +3,9 @@
 use App\Http\Controllers\Admin\AmenityController;
 use App\Http\Controllers\CustomerDashboardController;
 use App\Http\Controllers\FavoriteController;
+use App\Http\Controllers\Flight\CustomerFlightBookingController;
 use App\Http\Controllers\Flight\FlightController;
+use App\Http\Controllers\Flight\TicketController;
 use App\Http\Controllers\Host\HostBookingController;
 use App\Http\Controllers\Host\HostDashboardController;
 use App\Http\Controllers\Host\HostPayoutController;
@@ -49,7 +51,7 @@ Route::prefix('flights')->group(function () {
 
     // ÉTAPE 2 & 3 : Vérification de l'inventaire, paiement Mobile Money et émission immédiate
     Route::post('/verify-and-pay', [FlightController::class, 'verifyAndPay'])->name('api.flights.verify_pay');
-
+    Route::get('/my-bookings-status/{id}', [FlightController::class, 'getBookingStatus']);
 });
 
 // Groupement dédié à la gestion des billets et du cycle de vie des PNR existants
@@ -82,6 +84,10 @@ Route::get('/amenities/room', [AmenityController::class, 'amenties']);
 Route::middleware(['auth:sanctum'])->group(function () {
     Route::post('/bookings', [BookingController::class, 'store']);
     Route::get('/my-bookings', [BookingController::class, 'index']);
+    Route::get('/customer/flights/bookings', [CustomerFlightBookingController::class, 'index']);
+
+    // Route optionnelle pour rafraîchir ou voir le détail live du PNR
+    Route::get('/customer/flights/bookings/{pnr}/sync', [CustomerFlightBookingController::class, 'syncLiveGds']);
     Route::post('/bookings/{booking}/pay', [PaymentController::class, 'pay']);
     Route::get('/customer/dashboard-data', [CustomerDashboardController::class, 'index']);
     Route::get('/customer/bookings', [CustomerDashboardController::class, 'bookings']);
