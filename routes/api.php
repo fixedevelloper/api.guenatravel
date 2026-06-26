@@ -5,6 +5,7 @@ use App\Http\Controllers\CustomerDashboardController;
 use App\Http\Controllers\FavoriteController;
 use App\Http\Controllers\Flight\CustomerFlightBookingController;
 use App\Http\Controllers\Flight\FlightController;
+use App\Http\Controllers\Flight\FlightTravelOproController;
 use App\Http\Controllers\Flight\TicketController;
 use App\Http\Controllers\Host\HostBookingController;
 use App\Http\Controllers\Host\HostDashboardController;
@@ -43,14 +44,18 @@ Route::middleware('auth:sanctum')->group(function () {
 */
 // Recherche et découverte
 Route::get('/search', [SearchController::class, 'index']);
+Route::get('/airports/search', [SearchController::class, 'search']);
 Route::prefix('flights')->group(function () {
     Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
     Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
     // ÉTAPE 1 : Rechercher des offres de vols (Next.js -> Laravel -> Travelport)
-    Route::post('/search', [FlightController::class, 'search'])->name('api.flights.search');
-
+   // Route::post('/search', [FlightController::class, 'search'])->name('api.flights.search');
+    Route::post('/search', [FlightTravelOproController::class, 'search'])->name('api.flights.search');
+    Route::post('/extra-services', [FlightTravelOproController::class, 'getExtraServices']);
+    Route::post('/revalidate', [FlightTravelOproController::class, 'revalidate']);
+     Route::post('/fare-rules', [FlightTravelOproController::class, 'fareRules']);
     // ÉTAPE 2 & 3 : Vérification de l'inventaire, paiement Mobile Money et émission immédiate
-    Route::post('/verify-and-pay', [FlightController::class, 'verifyAndPay'])->name('api.flights.verify_pay');
+    Route::post('/verify-and-pay', [FlightTravelOproController::class, 'verifyAndPay'])->name('api.flights.verify_pay');
     Route::get('/my-bookings-status/{id}', [FlightController::class, 'getBookingStatus']);
 });
 

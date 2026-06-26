@@ -34,7 +34,7 @@ class FlightController extends Controller
 
     public function search(Request $request)
     {
-        // ... (Ton code de recherche initial reste inchangé et propre)
+
         $validatedData = $request->validate([
             'trip_type' => 'required|string|in:one_way,round_trip,multi_city',
             'return_date' => 'nullable|date|after_or_equal:departure_date',

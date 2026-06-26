@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Jobs\ProcessTraveloProBooking;
 use Illuminate\Console\Command;
 use App\Models\FlightBooking;
 use App\Jobs\ProcessTravelportBooking;
@@ -93,8 +94,8 @@ class CheckPendingPaymentsCommand extends Command
                     'payment_status' => 'paid'
                 ]);
                 $selectedFlight = $booking->raw_flight_data;
-                ProcessTravelportBooking::dispatch($booking->id, $selectedFlight);
-
+               // ProcessTravelportBooking::dispatch($booking->id, $selectedFlight);
+                ProcessTraveloProBooking::dispatch($booking->id, $selectedFlight);
             } catch (\Exception $e) {
                 Log::error("[Command Payment] Erreur lors de la vérification du Booking #{$booking->id} : " . $e->getMessage());
             }

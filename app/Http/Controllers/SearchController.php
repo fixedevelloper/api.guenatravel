@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\PropertyResource;
+use App\Models\Airport;
 use App\Services\SearchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -62,5 +63,36 @@ public function index(Request $request)
             'error'   => $e->getMessage()
         ], 500);
     }
+}
+
+/**
+ * Rechercher des aéroports en base de données locale.
+ */
+public function search(Request $request): JsonResponse
+{
+    // 1. On récupère le terme recherché (ex: /api/airports/search?q=lon)
+    $query = $request->query('q');
+
+    // Si la requête est vide, on renvoie une liste vide pour éviter de charger toute la table
+    if (blank($query) || strlen($query) < 2) {
+        return response()->json([]);
+    }
+
+    $searchTerm = strtolower($query);
+
+    // 2. Recherche multicritère performante sur notre table locale
+    $airports = Airport::query()
+        ->where('airport_code', 'LIKE', $searchTerm . '%') // Priorité aux codes commençant par la recherche (ex: LON)
+        ->orWhere('city', 'LIKE', '%' . $searchTerm . '%')   // Recherche dans la ville
+        ->orWhere('airport_name', 'LIKE', '%' . $searchTerm . '%') // Recherche dans le nom
+        ->take(10) // On limite à 10 résultats pour une autocomplétion ultra-fluide côté Front
+        ->get(['airport_code', 'airport_name', 'city', 'country']); // On ne sélectionne que les champs nécessaires
+
+    // 3. Retour au format JSON
+    return response()->json([
+        'success' => true,
+        'count'   => $airports->count(),
+        'results' => $airports
+    ]);
 }
 }
