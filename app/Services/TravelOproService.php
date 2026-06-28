@@ -202,6 +202,287 @@ class TravelOproService
             ];
         }
     }
+    public function ticketOrder(string $uniqueId): array
+    {
+        $payload = array_merge($this->authData, [
+            'UniqueID' => $uniqueId,
+        ]);
+
+        $response = Http::post($this->baseUrl . '/aeroVE5/ticket_order', $payload);
+        $data = $response->json();
+
+        // Cas: erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'      => false,
+                'type'         => 'validation_error',
+                'error_code'   => $data['Errors']['ErrorCode']    ?? null,
+                'error_message'=> $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        $result = $data['AirOrderTicketRS']['TicketOrderResult'] ?? null;
+
+        if (!$result) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        // Cas: commande échouée (Success = "false")
+        if (($result['Success'] ?? 'false') === 'false') {
+            $error = $result['Errors']['Error'] ?? [];
+            return [
+                'success'       => false,
+                'type'          => 'order_failed',
+                'unique_id'     => $result['UniqueID']              ?? $uniqueId,
+                'target'        => $result['Target']                ?? null,
+                'error_code'    => $error['ErrorCode']              ?? null,
+                'error_message' => $error['ErrorMessage']           ?? 'Commande refusée.',
+            ];
+        }
+
+        // Cas: succès
+        return [
+            'success'   => true,
+            'type'      => 'order_success',
+            'unique_id' => $result['UniqueID'] ?? $uniqueId,
+            'target'    => $result['Target']   ?? null,
+        ];
+    }
+    public function tripDetails(string $uniqueId): array
+    {
+        $payload = array_merge($this->authData, [
+            'UniqueID' => $uniqueId,
+        ]);
+
+        $response = Http::post($this->baseUrl . '/aeroVE5/trip_details', $payload);
+        $data     = $response->json();
+
+        // Erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        $result = $data['TripDetailsResponse']['TripDetailsResult'] ?? null;
+
+        if (!$result || !($result['Success'] ?? false)) {
+            return [
+                'success'       => false,
+                'type'          => 'api_error',
+                'error_message' => 'Réponse invalide ou échec API.',
+            ];
+        }
+
+        $itinerary = $result['TravelItinerary'];
+        $info      = $itinerary['ItineraryInfo'];
+
+        return [
+            'success'       => true,
+            'unique_id'     => $itinerary['UniqueID'],
+            'target'        => $result['Target'],
+            'booking_status'=> $itinerary['BookingStatus'],
+            'ticket_status' => $itinerary['TicketStatus'],
+            'origin'        => $itinerary['Origin'],
+            'destination'   => $itinerary['Destination'],
+            'fare_type'     => $itinerary['FareType'],
+            'passengers'    => $this->parsePassengers($info['CustomerInfos']),
+            'flights'       => $this->parseFlights($info['ReservationItems']),
+            'pricing'       => $this->parsePricing($info['ItineraryPricing']),
+            'fare_breakdown'=> $this->parseFareBreakdown($info['TripDetailsPTC_FareBreakdowns']),
+            'extra_services'=> $this->parseExtraServices($info['ExtraServices']['Services'] ?? []),
+            'booking_notes' => $info['BookingNotes'] ?? [],
+        ];
+    }
+    public function cancelBooking(string $uniqueId): array
+    {
+        $payload = array_merge($this->authData, [
+            'UniqueID' => $uniqueId,
+        ]);
+
+        $response = Http::post($this->baseUrl . '/aeroVE5/cancel', $payload);
+        $data     = $response->json();
+
+        // Erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        $result = $data['CancelBookingResponse']['CancelBookingResult'] ?? null;
+
+        if (!$result) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        // Échec métier (Success = "false")
+        if (($result['Success'] ?? 'false') === 'false') {
+            $error = $result['Errors'] ?? [];
+            return [
+                'success'       => false,
+                'type'          => 'cancel_failed',
+                'target'        => $result['Target']          ?? null,
+                'unique_id'     => $result['UniqueID']        ?: $uniqueId,
+                'error_code'    => $error['ErrorCode']        ?? null,
+                'error_message' => $error['ErrorMessage']     ?? 'Annulation refusée.',
+            ];
+        }
+
+        // Succès
+        return [
+            'success'   => true,
+            'type'      => 'cancel_success',
+            'unique_id' => $result['UniqueID'],
+            'target'    => $result['Target'] ?? null,
+        ];
+    }
+    public function searchPostTicketStatus(string $uniqueId, string $ptrUniqueId): array
+    {
+        $payload = array_merge($this->authData, [
+            'UniqueID'    => $uniqueId,
+            'ptrUniqueID' => $ptrUniqueId,
+        ]);
+
+        $response = Http::post($this->baseUrl . '/aeroVE5/search_post_ticket_status', $payload);
+        $data     = $response->json();
+
+        // Erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        $result = $data['PtrResponse']['PtrResult'] ?? null;
+
+        if (!$result) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        // Échec métier (Success = "false")
+        if (($result['Success'] ?? 'false') === 'false') {
+            $errors = $result['Errors'] ?? [];
+            return [
+                'success'       => false,
+                'type'          => 'request_failed',
+                'error_code'    => $errors['ErrorCode']    ?? null,
+                'error_message' => $errors['ErrorMessage'] ?? 'Requête échouée.',
+            ];
+        }
+
+        // Succès
+        return [
+            'success'     => true,
+            'type'        => 'status_found',
+            'ptr_details' => $this->parsePtrDetails($result['PtrDetails'] ?? []),
+        ];
+    }
+    public function voidTicketQuote(string $uniqueId, array $paxDetails): array
+    {
+        $payload = array_merge($this->authData, [
+            'UniqueID'   => $uniqueId,
+            'paxDetails' => $paxDetails,
+        ]);
+
+        $response = Http::post($this->baseUrl . '/aeroVE5/void_ticket_quote', $payload);
+        $data     = $response->json();
+
+        // Erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        $result = $data['VoidQuoteResponse']['VoidQuoteResult'] ?? null;
+
+        if (!$result) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        // Échec métier (Success = "false")
+        if (($result['Success'] ?? 'false') === 'false') {
+            $errors = $result['Errors'] ?? [];
+            return [
+                'success'       => false,
+                'type'          => 'void_quote_failed',
+                'unique_id'     => $result['UniqueID']         ?? $uniqueId,
+                'error_code'    => $errors['ErrorCode']        ?? null,
+                'error_message' => $errors['ErrorMessage']     ?? 'Demande de void refusée.',
+            ];
+        }
+
+        // Succès
+        return [
+            'success'         => true,
+            'type'            => 'void_quote_success',
+            'unique_id'       => $result['UniqueID'],
+            'ptr_unique_id'   => $result['ptrUniqueID'],
+            'status'          => $result['Status'],
+            'voiding_window'  => $result['VoidingWindow'],
+            'processing_time' => (int) $result['ProcessingTime'],
+            'void_quotes'     => $this->parseVoidQuotes($result['VoidQuotes'] ?? []),
+        ];
+    }
+    private function parseVoidQuotes(array $voidQuotes): array
+    {
+        return array_map(function ($quote) {
+            $fareFields = [
+                'admin_charges'      => 'AdminCharges',
+                'gst_charge'         => 'GSTCharge',
+                'total_voiding_fee'  => 'TotalVoidingFee',
+                'total_refund_amount'=> 'TotalRefundAmount',
+            ];
+
+            $parsed = [
+                'type'       => $quote['PassengerType'],
+                'title'      => $quote['Title'],
+                'first_name' => $quote['FirstName'],
+                'last_name'  => $quote['LastName'],
+                'eticket'    => $quote['ETicket'],
+            ];
+
+            foreach ($fareFields as $key => $apiKey) {
+                if (isset($quote[$apiKey])) {
+                    $parsed[$key] = [
+                        'amount'   => (float) $quote[$apiKey]['Amount'],
+                        'currency' => $quote[$apiKey]['CurrencyCode'],
+                    ];
+                }
+            }
+
+            return $parsed;
+        }, $voidQuotes);
+    }
     /**
      * Récupérer la liste complète des aéroports.
      */
@@ -332,13 +613,6 @@ class TravelOproService
             throw $e;
         }
     }
-    /**
-     * Crée une réservation (génération du PNR) auprès de TravelOpro.
-     * Cette méthode valide d'abord le tarif en temps réel via l'API revalidate.
-     *
-     * @param array $data Données reçues du contrôleur (contenant flightBookingInfo et paxInfo)
-     * @return array
-     */
     /**
      * Crée une réservation (génération du PNR) auprès de TravelOpro.
      * Cette méthode valide d'abord le tarif en temps réel via l'API revalidate.
@@ -478,6 +752,234 @@ class TravelOproService
                 'message' => "Une erreur interne est survenue lors du traitement de votre réservation."
             ];
         }
+    }
+    private function parsePtrDetails(array $ptrDetails): array
+    {
+        return array_map(function ($detail) {
+            $ptrType = $detail['PtrType'];
+
+            $parsed = [
+                'unique_id'     => $detail['UniqueID'],
+                'ptr_unique_id' => $detail['PtrUniqueID'],
+                'ptr_type'      => $ptrType,
+                'ptr_status'    => $detail['PtrStatus'],
+                'resolution'    => $detail['Resolution'],
+                'passengers'    => $this->parsePtrPassengers(
+                    $detail['PaxDetails'] ?? [],
+                    $ptrType
+                ),
+            ];
+
+            // Segments + fares négociés (ReIssueQuote uniquement)
+            if ($ptrType === 'ReIssueQuote' && !empty($detail['RequestedPreferences'])) {
+                $parsed['requested_preferences'] = $this->parseRequestedPreferences(
+                    $detail['RequestedPreferences']
+                );
+            }
+
+            return $parsed;
+        }, $ptrDetails);
+    }
+    private function parsePtrPassengers(array $paxDetails, string $ptrType): array
+    {
+        return array_map(function ($pax) use ($ptrType) {
+            $passenger = [
+                'type'       => $pax['PassengerType'],
+                'title'      => $pax['Title'],
+                'first_name' => $pax['FirstName'],
+                'last_name'  => $pax['LastName'],
+                'eticket'    => $pax['ETicket'],
+            ];
+
+            // Fares de remboursement (RefundQuote uniquement)
+            if ($ptrType === 'RefundQuote' && isset($pax['QuotedFares'])) {
+                $passenger['quoted_fares'] = $this->parseRefundQuotedFares($pax['QuotedFares']);
+            }
+
+            return $passenger;
+        }, $paxDetails);
+    }
+    private function parseRefundQuotedFares(array $fares): array
+    {
+        $fields = [
+            'total_fare'           => 'TotalFare',
+            'unused_fare'          => 'UnusedFare',
+            'cancellation_charge'  => 'CancellationCharge',
+            'no_show_charge'       => 'NoShowCharge',
+            'tax'                  => 'Tax',
+            'gst_charge'           => 'GSTCharge',
+            'total_refund_charges' => 'TotalRefundCharges',
+            'total_refund_amount'  => 'TotalRefundAmount',
+            'yq_tax'               => 'YQ_Tax',
+            'yr_tax'               => 'YR_Tax',
+            'extra_service_charge' => 'ExtraServiceCharge',
+        ];
+
+        $result = [];
+        foreach ($fields as $key => $apiKey) {
+            if (isset($fares[$apiKey])) {
+                $result[$key] = [
+                    'amount'   => (float) $fares[$apiKey]['Amount'],
+                    'currency' => $fares[$apiKey]['CurrencyCode'],
+                ];
+            }
+        }
+
+        return $result;
+    }
+    private function parseRequestedPreferences(array $preferences): array
+    {
+        return array_map(function ($pref) {
+            return [
+                'preference_option' => $pref['PreferenceOption'],
+                'quoted_segments'   => $this->parseQuotedSegments($pref['QuotedSegments'] ?? []),
+                'quoted_fares'      => $this->parseReIssueQuotedFares($pref['QuotedFares'] ?? []),
+            ];
+        }, $preferences);
+    }
+
+    private function parseQuotedSegments(array $segments): array
+    {
+        return array_map(function ($seg) {
+            return [
+                'departure_airport' => $seg['DepartureAirportLocationCode'],
+                'arrival_airport'   => $seg['ArrivalAirportLocationCode'],
+                'cabin_class'       => $seg['CabinClass'],
+                'booking_class'     => $seg['BookingClass'],
+                'airline_code'      => $seg['AirlineCode'],
+                'flight_number'     => $seg['AirlineCode'] . $seg['FlightNumber'],
+                'departure_time'    => $seg['DepartureDateTime'],
+                'arrival_time'      => $seg['ArrivalDateTime'],
+                'duration_minutes'  => (int) $seg['JourneyDuration'],
+                'stops'             => (int) $seg['StopQuantity'],
+                'is_return'         => $seg['isReturn'],
+            ];
+        }, $segments);
+    }
+
+    private function parseReIssueQuotedFares(array $quotedFares): array
+    {
+        return array_map(function ($fare) {
+            $fields = [
+                'base_fare_difference'  => 'BaseFareDifference',
+                'tax_difference'        => 'TaxDifference',
+                'gst'                   => 'GST',
+                'no_show_penalty'       => 'NoShowPenalty',
+                'penalty'               => 'Penalty',
+                'other_taxes_k3'        => 'OtherTaxesK3',
+                'total_fare_difference' => 'TotalFareDifference',
+            ];
+
+            $result = [
+                'pax_type' => $fare['PassengerTypeQuantity']['Quantity'],
+                'quantity' => $fare['PassengerTypeQuantity']['Code'],
+            ];
+
+            foreach ($fields as $key => $apiKey) {
+                if (isset($fare[$apiKey])) {
+                    $result[$key] = [
+                        'amount'   => (float) $fare[$apiKey]['Amount'],
+                        'currency' => $fare[$apiKey]['CurrencyCode'],
+                    ];
+                }
+            }
+
+            return $result;
+        }, $quotedFares);
+    }
+    private function parsePassengers(array $customerInfos): array
+    {
+        return array_map(function ($item) {
+            $p = $item['CustomerInfo'];
+            return [
+                'item_rph'      => $p['ItemRPH'],
+                'type'          => $p['PassengerType'],
+                'title'         => $p['PassengerTitle'],
+                'first_name'    => $p['PassengerFirstName'],
+                'last_name'     => $p['PassengerLastName'],
+                'gender'        => $p['Gender'],
+                'dob'           => $p['DateOfBirth'],
+                'nationality'   => $p['PassengerNationality'],
+                'passport'      => $p['PassportNumber'],
+                'email'         => $p['EmailAddress'],
+                'phone'         => $p['PhoneNumber'],
+                'postcode'      => $p['PostCode'],
+                'eticket'       => $p['eTicketNumber'],
+            ];
+        }, $customerInfos);
+    }
+
+    private function parseFlights(array $reservationItems): array
+    {
+        return array_map(function ($item) {
+            $f = $item['ReservationItem'];
+            return [
+                'item_rph'          => $f['ItemRPH'],
+                'airline_pnr'       => $f['AirlinePNR'],
+                'flight_number'     => $f['MarketingAirlineCode'] . $f['FlightNumber'],
+                'marketing_airline' => $f['MarketingAirlineCode'],
+                'operating_airline' => $f['OperatingAirlineCode'],
+                'departure_airport' => $f['DepartureAirportLocationCode'],
+                'departure_time'    => $f['DepartureDateTime'],
+                'departure_terminal'=> $f['DepartureTerminal'],
+                'arrival_airport'   => $f['ArrivalAirportLocationCode'],
+                'arrival_time'      => $f['ArrivalDateTime'],
+                'arrival_terminal'  => $f['ArrivalTerminal'],
+                'duration_minutes'  => (int) $f['JourneyDuration'],
+                'cabin_class'       => $f['CabinClassText'],
+                'booking_class'     => $f['ResBookDesigCode'],
+                'equipment'         => $f['AirEquipmentType'],
+                'stops'             => $f['StopQuantity'],
+                'pax_count'         => $f['NumberInParty'],
+                'baggage'           => $f['Baggage'],
+            ];
+        }, $reservationItems);
+    }
+
+    private function parsePricing(array $pricing): array
+    {
+        return [
+            'currency'     => $pricing['TotalFare']['CurrencyCode'],
+            'base_fare'    => (float) $pricing['EquiFare']['Amount'],
+            'tax'          => (float) $pricing['Tax']['Amount'],
+            'service_tax'  => (float) $pricing['ServiceTax']['Amount'],
+            'total'        => (float) $pricing['TotalFare']['Amount'],
+        ];
+    }
+
+    private function parseFareBreakdown(array $breakdowns): array
+    {
+        return array_map(function ($item) {
+            $b    = $item['TripDetailsPTC_FareBreakdown'];
+            $fare = $b['TripDetailsPassengerFare'];
+            return [
+                'pax_type'    => $b['PassengerTypeQuantity']['Code'],
+                'quantity'    => $b['PassengerTypeQuantity']['Quantity'],
+                'base_fare'   => (float) $fare['EquiFare']['Amount'],
+                'tax'         => (float) $fare['Tax']['Amount'],
+                'service_tax' => (float) $fare['ServiceTax']['Amount'],
+                'total'       => (float) $fare['TotalFare']['Amount'],
+                'currency'    => $fare['TotalFare']['CurrencyCode'],
+            ];
+        }, $breakdowns);
+    }
+
+    private function parseExtraServices(array $services): array
+    {
+        return array_map(function ($item) {
+            $s = $item['Service'];
+            return [
+                'pax_item_rph'  => $s['NameNumber'],
+                'service_id'    => $s['ServiceId'],
+                'type'          => $s['Type'],
+                'description'   => $s['Description'],
+                'behavior'      => $s['Behavior'],
+                'checkin_type'  => $s['CheckInType'],
+                'is_mandatory'  => $s['IsMandatory'],
+                'amount'        => (float) $s['ServiceCost']['Amount'],
+                'currency'      => $s['ServiceCost']['CurrencyCode'],
+            ];
+        }, $services);
     }
     /**
      * Formate et mappe les résultats bruts de TravelOpro vers la structure standard attendue par le Front.

@@ -602,4 +602,75 @@ class FlightTravelOproController extends Controller
             ], 500);
         }
     }
+    public function voidTicketQuote(Request $request): JsonResponse
+    {
+        $request->validate([
+            'unique_id'              => 'required|string',
+            'pax_details'            => 'required|array|min:1',
+            'pax_details.*.type'     => 'required|string|in:ADT,CHD,INF',
+            'pax_details.*.title'    => 'required|string',
+            'pax_details.*.firstName'=> 'required|string',
+            'pax_details.*.lastName' => 'required|string',
+            'pax_details.*.eTicket'  => 'required|string',
+        ]);
+
+        $result = $this->travelOproService->voidTicketQuote(
+            $request->input('unique_id'),
+            $request->input('pax_details')
+        );
+
+        if (!$result['success']) {
+            $status = match($result['type']) {
+            'validation_error'  => 422,
+            'void_quote_failed' => 400,
+            default             => 500,
+        };
+
+        return response()->json([
+            'message'    => $result['error_message'],
+            'error_code' => $result['error_code'] ?? null,
+            'type'       => $result['type'],
+            'unique_id'  => $result['unique_id']  ?? null,
+        ], $status);
+    }
+
+        return response()->json([
+            'message'         => 'Void quote généré avec succès.',
+            'unique_id'       => $result['unique_id'],
+            'ptr_unique_id'   => $result['ptr_unique_id'],
+            'status'          => $result['status'],
+            'voiding_window'  => $result['voiding_window'],
+            'processing_time' => $result['processing_time'],
+            'void_quotes'     => $result['void_quotes'],
+        ], 200);
+    }
+    public function cancelBooking(Request $request): JsonResponse
+    {
+        $request->validate([
+            'unique_id' => 'required|string',
+        ]);
+
+        $result = $this->travelOproService->cancelBooking($request->input('unique_id'));
+
+        if (!$result['success']) {
+            $status = match($result['type']) {
+            'validation_error' => 422,
+            'cancel_failed'    => 400,
+            default            => 500,
+        };
+
+        return response()->json([
+            'message'    => $result['error_message'],
+            'error_code' => $result['error_code'] ?? null,
+            'type'       => $result['type'],
+            'unique_id'  => $result['unique_id']  ?? null,
+        ], $status);
+    }
+
+        return response()->json([
+            'message'   => 'Réservation annulée avec succès.',
+            'unique_id' => $result['unique_id'],
+            'target'    => $result['target'],
+        ], 200);
+    }
 }

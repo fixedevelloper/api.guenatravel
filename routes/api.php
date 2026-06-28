@@ -6,6 +6,7 @@ use App\Http\Controllers\FavoriteController;
 use App\Http\Controllers\Flight\CustomerFlightBookingController;
 use App\Http\Controllers\Flight\FlightController;
 use App\Http\Controllers\Flight\FlightTravelOproController;
+use App\Http\Controllers\Flight\HotelController;
 use App\Http\Controllers\Flight\TicketController;
 use App\Http\Controllers\Host\HostBookingController;
 use App\Http\Controllers\Host\HostDashboardController;
@@ -44,7 +45,14 @@ Route::middleware('auth:sanctum')->group(function () {
 */
 // Recherche et découverte
 Route::get('/search', [SearchController::class, 'index']);
+Route::get('/hotels/search', [HotelController::class, 'search']);
+Route::get('/hotels/cities', [HotelController::class, 'getCities']);
+Route::get('/hotels/cities/search', [HotelController::class, 'searchCities']);
+Route::get('/hotels/room-rates', [HotelController::class, 'getRoomRates']);
+Route::get('/hotels/details', [HotelController::class, 'getHotelDetails']);
+Route::get('/hotels/bookings-status/{id}', [HotelController::class, 'getBookingStatus']);
 Route::get('/airports/search', [SearchController::class, 'search']);
+Route::post('/hotels/book', [HotelController::class, 'bookHotel']);
 Route::prefix('flights')->group(function () {
     Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
     Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
@@ -95,7 +103,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/customer/flights/bookings/{pnr}/sync', [CustomerFlightBookingController::class, 'syncLiveGds']);
     Route::post('/bookings/{booking}/pay', [PaymentController::class, 'pay']);
     Route::get('/customer/dashboard-data', [CustomerDashboardController::class, 'index']);
-    Route::get('/customer/bookings', [CustomerDashboardController::class, 'bookings']);
+   // Route::get('/customer/bookings', [CustomerDashboardController::class, 'bookings']);
+    Route::get('/customer/bookings', [HotelController::class, 'getCustomerBookings']);
     Route::get('/customer/favorites', [FavoriteController::class, 'index']);
     Route::post('/customer/favorites', [FavoriteController::class, 'store']);
     Route::delete('/customer/favorites/{propertyId}', [FavoriteController::class, 'destroy']);
