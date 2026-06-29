@@ -56,8 +56,8 @@ class ProcessHotelBooking implements ShouldQueue
         if ($apiResult['success']) {
             $this->booking->update([
                 'status'                    => 'CONFIRMED',
-                'reference_num'             => $apiResult['booking']['referenceNum'] ?? null,
-                'supplier_confirmation_num' => $apiResult['booking']['supplierConfirmationNum'] ?? null,
+                'reference_num'             => $apiResult['booking']['reference_num'] ?? null,
+                'supplier_confirmation_num' => $apiResult['booking']['supplier_confirmation_num'] ?? null,
                 'api_response'              => $apiResult['booking'],
             ]);
             Log::info("Booking {$this->booking->id} confirmé avec succès auprès de l'hôtel.");
