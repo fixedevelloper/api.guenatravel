@@ -109,7 +109,6 @@ class HotelService
         default => 'USD'
     };
 
-        logger($params);
     // 3. Construction du payload avec les fallbacks intelligents issus du contexte
     $payload = array_merge($this->authData, [
         // Si le paramètre 'currency' n'est pas envoyé par le front-end, on prend la devise du pays détecté
@@ -130,7 +129,6 @@ class HotelService
         'occupancy'        => $this->buildOccupancy($params['occupancy']),
     ]);
 
-    logger($payload);
     // 4. Exécution de la requête avec un timeout de sécurité (très important pour les recherches d'hôtels)
     $response = Http::timeout(30)->post(
         'https://travelnext.works/api/hotel-api-v6/hotel_search',
@@ -147,6 +145,7 @@ class HotelService
 
     $data = $response->json();
 
+    logger($data);
     // Erreur de validation (structure plate de l'API externe)
     if (isset($data['Errors'])) {
         return [
@@ -161,7 +160,8 @@ class HotelService
         return [
             'success'       => false,
             'type'          => 'invalid_response',
-            'error_message' => 'Réponse inattendue de l\'API.',
+            //'error_message' => 'Réponse inattendue de l\'API.',
+            'error_message' => $data['status']['error'],
         ];
     }
 
@@ -335,7 +335,211 @@ class HotelService
             'booking' => $this->parseBookingResponse($data),
         ];
     }
+    public function filterHotels(array $params): array
+    {
+        $payload = [
+            'sessionId' => $params['session_id'],
+            'maxResult' => $params['max_result'] ?? 20,
+            'filters'   => $this->buildFilters($params['filters'] ?? []),
+        ];
 
+        $response = Http::timeout(20)->post(
+            'https://travelnext.works/api/hotel-api-v6/filterResults',
+            $payload
+        );
+
+        $data = $response->json();
+
+        // Erreur de validation (structure plate)
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        // Erreur dans status (ex: "No Results found...")
+        if (isset($data['status']['error']) && !empty($data['status']['error'])) {
+            return [
+                'success'       => false,
+                'type'          => 'no_results',
+                'error_message' => $data['status']['error'],
+                'hotels'        => [],   // Tableau vide pour éviter les erreurs côté client
+                'status'        => [
+                    'session_id'   => null,
+                    'more_results' => false,
+                    'next_token'   => null,
+                    'filter_key'   => null,
+                ],
+            ];
+        }
+
+        // Réponse sans itineraries
+        if (!isset($data['itineraries'])) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+                'hotels'        => [],
+            ];
+        }
+
+        return [
+            'success'    => true,
+            'status'     => $this->parseSearchStatus($data['status'] ?? []),
+            'hotels'     => $this->parseHotels($data['itineraries']),
+            'filter_key' => $data['status']['filterKey'] ?? null,
+        ];
+    }
+    public function getBookingDetails(string $supplierConfirmationNum, string $referenceNum): array
+    {
+        $response = Http::timeout(20)->post(
+            'https://travelnext.works/api/hotel-api-v6/bookingDetails',
+            array_merge($this->authData, [
+                'supplierConfirmationNum' => $supplierConfirmationNum,
+                'referenceNum'            => $referenceNum,
+            ])
+        );
+
+        $data = $response->json();
+
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        if (!empty($data['error'])) {
+            return [
+                'success'       => false,
+                'type'          => 'api_error',
+                'error_message' => $data['error'],
+            ];
+        }
+
+        if (!isset($data['roomBookDetails'])) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'booking' => $this->parseBookingDetails($data),
+        ];
+    }
+
+    private function parseBookingDetails(array $data): array
+    {
+        $details = $data['roomBookDetails'];
+
+        return [
+            'status'                    => $data['status'],
+            'supplier_confirmation_num' => $data['supplierConfirmationNum'],
+            'reference_num'             => $data['referenceNum'],
+            'client_ref_num'            => $data['clientRefNum'],
+            'product_id'                => $data['productId'],
+            'hotel'                     => [
+                'hotel_id'    => $details['hotelId'],
+                'name'        => $details['hotelName'],
+                'address'     => $details['address'],
+                'city'        => $details['city'],
+                'country'     => $details['country'],
+                'postal_code' => $details['postalCode']  ?? null,
+                'latitude'    => $details['latitude']    ? (float) $details['latitude']  : null,
+                'longitude'   => $details['longitude']   ? (float) $details['longitude'] : null,
+                'email'       => $details['email']       ?? null,
+                'phone'       => $this->cleanPhone($details['phone'] ?? ''),
+                'image'       => !empty($details['image']) ? $details['image'] : null,
+                'rating'      => $details['rating']      ?? null,
+            ],
+            'check_in'             => $details['checkIn'],
+            'check_out'            => $details['checkOut'],
+            'days'                 => (int) $details['days'],
+            'currency'             => $details['currency'],
+            'net_price'            => (float) $details['NetPrice'],
+            'fare_type'            => $details['fareType'],
+            'cancellation_policy'  => !empty($details['cancellationPolicy'])
+                ? $this->parseCancellationPolicy($details['cancellationPolicy'])
+                : [],
+            'cancel_reference_num' => $details['cancelReferenceNum'] ?? null,
+            'customer_email'       => $details['customerEmail']      ?? null,
+            'customer_phone'       => $details['customerPhone']      ?? null,
+            'booking_date_time'    => $details['bookingDateTime']    ?? null,
+            'rooms'                => $this->parseBookedRooms($details['rooms'] ?? []),
+        ];
+    }
+
+// Nettoie les <br> dans les numéros de téléphone
+    private function cleanPhone(string $phone): ?string
+    {
+        if (empty($phone)) return null;
+        $numbers = array_filter(
+            array_map('trim', explode('<br>', $phone)),
+            fn($p) => !empty($p)
+        );
+        return implode(' / ', array_unique($numbers));
+    }
+    private function buildFilters(array $filters): array
+    {
+        $built = [];
+
+        if (isset($filters['price'])) {
+            $built['price'] = [
+                'min' => $filters['price']['min'] ?? 0,
+                'max' => $filters['price']['max'] ?? 999999,
+            ];
+        }
+
+        if (!empty($filters['rating'])) {
+            $built['rating'] = is_array($filters['rating'])
+                ? implode(',', $filters['rating'])
+                : $filters['rating'];
+        }
+
+        if (!empty($filters['tripadvisor_rating'])) {
+            $built['tripadvisorRating'] = is_array($filters['tripadvisor_rating'])
+                ? implode(',', $filters['tripadvisor_rating'])
+                : $filters['tripadvisor_rating'];
+        }
+
+        if (!empty($filters['hotel_name'])) {
+            $built['hotelName'] = $filters['hotel_name'];
+        }
+
+        if (!empty($filters['fare_type'])) {
+            $built['faretype'] = $filters['fare_type'];
+        }
+
+        if (!empty($filters['property_type'])) {
+            $built['propertyType'] = $filters['property_type'];
+        }
+
+        if (!empty($filters['facilities'])) {
+            $built['facility'] = is_array($filters['facilities'])
+                ? implode(',', $filters['facilities'])
+                : $filters['facilities'];
+        }
+
+        if (!empty($filters['sorting'])) {
+            $built['sorting'] = $filters['sorting'];
+        }
+
+        if (!empty($filters['locality'])) {
+            $built['locality'] = is_array($filters['locality'])
+                ? implode(',', $filters['locality'])
+                : $filters['locality'];
+        }
+
+        return $built;
+    }
     private function buildPaxDetails(array $rooms): array
     {
         return array_map(function ($room) {

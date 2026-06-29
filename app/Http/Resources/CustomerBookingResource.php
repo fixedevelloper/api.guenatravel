@@ -22,6 +22,7 @@ class CustomerBookingResource extends JsonResource
         return [
             'id'               => $this->id,
             'reference'        => $this->reference_num ?? 'En attente',
+            'supplier_confirmation_num'        => $this->supplier_confirmation_num ?? 'En attente',
             'property_name'    => $this->api_request_payload['hotel_name'] ?? 'Établissement hôtelier', // Fallback si non stocké en colonne directe
             'property_image'   => $this->api_request_payload['hotel_main_image'] ?? 'https://images.unsplash.com/photo-1566073771259-6a8506099945?q=80&w=600', // Image par défaut si manquante
             'property_address' => $this->api_request_payload['hotel_address'] ?? $this->hotel_id,

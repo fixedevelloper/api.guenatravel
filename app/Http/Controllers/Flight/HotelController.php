@@ -37,24 +37,24 @@ class HotelController extends Controller
     {
         // 1. Validation stricte et corrigée
         $validated = $request->validate([
-            'checkin'                    => 'required|date|after_or_equal:today', // Corrigé : Permet de réserver aujourd'hui
-            'checkout'                   => 'required|date|after:checkin',
-            'latitude'                   => 'required|numeric',
-            'longitude'                  => 'required|numeric',
-            'nationality'                => 'required|string|size:2',
-            'currency'                   => 'sometimes|string|size:3',
-            'radius'                     => 'sometimes|integer|min:1|max:100',
-            'max_result'                 => 'sometimes|integer|min:1|max:100',
-            'city_name'                  => 'sometimes|string',
-            'country_name'               => 'sometimes|string',
-            'hotel_codes'                => 'sometimes|array',
-            'hotel_codes.*'              => 'string',
-            'occupancy'                  => 'required|array|min:1',
-            'occupancy.*.room_no'        => 'required|integer|min:1',
-            'occupancy.*.adult'          => 'required|integer|min:1',
-            'occupancy.*.child'          => 'sometimes|integer|min:0',
-            'occupancy.*.child_age'      => 'sometimes|array',
-            'occupancy.*.child_age.*'    => 'integer|min:0|max:17',
+            'checkin' => 'required|date|after_or_equal:today', // Corrigé : Permet de réserver aujourd'hui
+            'checkout' => 'required|date|after:checkin',
+            'latitude' => 'required|numeric',
+            'longitude' => 'required|numeric',
+            'nationality' => 'required|string|size:2',
+            'currency' => 'sometimes|string|size:3',
+            'radius' => 'sometimes|integer|min:1|max:100',
+            'max_result' => 'sometimes|integer|min:1|max:100',
+            'city_name' => 'sometimes|string',
+            'country_name' => 'sometimes|string',
+            'hotel_codes' => 'sometimes|array',
+            'hotel_codes.*' => 'string',
+            'occupancy' => 'required|array|min:1',
+            'occupancy.*.room_no' => 'required|integer|min:1',
+            'occupancy.*.adult' => 'required|integer|min:1',
+            'occupancy.*.child' => 'sometimes|integer|min:0',
+            'occupancy.*.child_age' => 'sometimes|array',
+            'occupancy.*.child_age.*' => 'integer|min:0|max:17',
         ]);
 
         // 2. Sécurité : On passe uniquement les données validées au service
@@ -64,16 +64,17 @@ class HotelController extends Controller
         if (!isset($result['success']) || !$result['success']) {
             $errorType = $result['type'] ?? 'server_error';
 
-            $status = match($errorType) {
+            $status = match($errorType){
             'validation_error' => 422,
-            'authentication_error' => 401,
+            'invalid_response' => 404,
+             'authentication_error' => 401,
             default            => 500,
         };
 
         return response()->json([
-            'message'    => $result['error_message'] ?? 'An unexpected error occurred.',
+            'message' => $result['error_message'] ?? 'An unexpected error occurred.',
             'error_code' => $result['error_code'] ?? null,
-            'type'       => $errorType,
+            'type' => $errorType,
         ], $status);
     }
 
@@ -82,6 +83,7 @@ class HotelController extends Controller
             'hotels' => $result['hotels'] ?? [],
         ], 200);
     }
+
     public function getCities(int $from = 1, int $to = 100): array
     {
         $cities = HotelCity::orderBy('city_name')
@@ -92,20 +94,21 @@ class HotelController extends Controller
 
         return [
             'success' => true,
-            'cities'  => $cities,
+            'cities' => $cities,
         ];
     }
+
     public function searchCities(Request $request): JsonResponse
     {
         // 1. Récupérer et nettoyer le terme de recherche (?term=...)
         $term = trim($request->query('term', ''));
-        $limit = (int) $request->query('limit', 10);
+        $limit = (int)$request->query('limit', 10);
 
         // 2. Sécurité : si le terme est vide, retourner un tableau vide immédiatement
         if (empty($term)) {
             return response()->json([
                 'success' => true,
-                'cities'  => []
+                'cities' => []
             ]);
         }
 
@@ -121,17 +124,18 @@ class HotelController extends Controller
         // 4. Retourner une réponse JSON propre
         return response()->json([
             'success' => true,
-            'cities'  => $cities,
+            'cities' => $cities,
         ]);
     }
+
     public function getRoomRates(Request $request, HotelService $service): JsonResponse
     {
         // 1. Validation stricte des Query Params issus du GET Axios
         $validated = $request->validate([
             'session_id' => 'required|string',
             'product_id' => 'required|string',
-            'token_id'   => 'required|string',
-            'hotel_id'   => 'required|string',
+            'token_id' => 'required|string',
+            'hotel_id' => 'required|string',
         ]);
 
         // 2. Appel du service avec les données validées et nettoyées
@@ -146,7 +150,7 @@ class HotelController extends Controller
         if (!isset($result['success']) || !$result['success']) {
             $errorType = $result['type'] ?? 'api_error';
 
-            $status = match($errorType) {
+            $status = match($errorType){
             'validation_error'    => 422,
             'authentication_error' => 401,
             'token_expired'        => 410, // Utile si l'utilisateur a trop attendu sur la page
@@ -154,9 +158,9 @@ class HotelController extends Controller
         };
 
         return response()->json([
-            'message'    => $result['error_message'] ?? 'Unable to retrieve room rates.',
+            'message' => $result['error_message'] ?? 'Unable to retrieve room rates.',
             'error_code' => $result['error_code'] ?? null,
-            'type'       => $errorType,
+            'type' => $errorType,
         ], $status);
     }
 
@@ -166,13 +170,14 @@ class HotelController extends Controller
             'room_rates' => $result['room_rates'] ?? [],
         ], 200);
     }
+
     public function getHotelDetails(Request $request, HotelService $service): JsonResponse
     {
         $request->validate([
             'session_id' => 'required|string',
-            'hotel_id'   => 'required|string',
+            'hotel_id' => 'required|string',
             'product_id' => 'required|string',
-            'token_id'   => 'required|string',
+            'token_id' => 'required|string',
         ]);
 
         $result = $service->getHotelDetails(
@@ -183,15 +188,15 @@ class HotelController extends Controller
     );
 
         if (!$result['success']) {
-            $status = match($result['type']) {
+            $status = match($result['type']){
             'validation_error' => 422,
             default            => 500,
         };
 
         return response()->json([
-            'message'    => $result['error_message'],
+            'message' => $result['error_message'],
             'error_code' => $result['error_code'] ?? null,
-            'type'       => $result['type'],
+            'type' => $result['type'],
         ], $status);
     }
 
@@ -202,35 +207,35 @@ class HotelController extends Controller
     {
         // 1. Validation stricte des données d'entrée
         $validated = $request->validate([
-            'session_id'                          => 'required|string',
-            'product_id'                          => 'required|string',
-            'token_id'                            => 'required|string',
-            'rate_basis_id'                       => 'required|string',
-            'client_ref'                          => 'required|string',
-            'customer_email'                      => 'required|email',
-            'customer_phone'                      => 'required|string',
-            'booking_note'                        => 'sometimes|string|nullable',
+            'session_id' => 'required|string',
+            'product_id' => 'required|string',
+            'token_id' => 'required|string',
+            'rate_basis_id' => 'required|string',
+            'client_ref' => 'required|string',
+            'customer_email' => 'required|email',
+            'customer_phone' => 'required|string',
+            'booking_note' => 'sometimes|string|nullable',
 
             // Champs obligatoires pour la table locale (à ajouter à la validation ou à envoyer du front)
-            'hotel_id'                            => 'required|string',
-            'check_in'                            => 'required|date_format:Y-m-d',
-            'check_out'                           => 'required|date_format:Y-m-d',
-            'days'                                => 'required|integer|min:1',
-            'currency'                            => 'required|string|size:3',
-            'net_price'                           => 'required|numeric|min:0',
-            'fare_type'                           => 'required|string',
-            'payment_method'                      => 'required|string', // requis pour l'initiation du paiement
+            'hotel_id' => 'required|string',
+            'check_in' => 'required|date_format:Y-m-d',
+            'check_out' => 'required|date_format:Y-m-d',
+            'days' => 'required|integer|min:1',
+            'currency' => 'required|string|size:3',
+            'net_price' => 'required|numeric|min:0',
+            'fare_type' => 'required|string',
+            'payment_method' => 'required|string', // requis pour l'initiation du paiement
 
-            'rooms'                               => 'required|array|min:1',
-            'rooms.*.room_no'                     => 'required|integer|min:1',
-            'rooms.*.adults'                      => 'required|array|min:1',
-            'rooms.*.adults.*.title'              => 'required|string',
-            'rooms.*.adults.*.first_name'         => 'required|string',
-            'rooms.*.adults.*.last_name'          => 'required|string',
-            'rooms.*.children'                    => 'sometimes|array',
-            'rooms.*.children.*.title'            => 'required_with:rooms.*.children|string',
-            'rooms.*.children.*.first_name'       => 'required_with:rooms.*.children|string',
-            'rooms.*.children.*.last_name'        => 'required_with:rooms.*.children|string',
+            'rooms' => 'required|array|min:1',
+            'rooms.*.room_no' => 'required|integer|min:1',
+            'rooms.*.adults' => 'required|array|min:1',
+            'rooms.*.adults.*.title' => 'required|string',
+            'rooms.*.adults.*.first_name' => 'required|string',
+            'rooms.*.adults.*.last_name' => 'required|string',
+            'rooms.*.children' => 'sometimes|array',
+            'rooms.*.children.*.title' => 'required_with:rooms.*.children|string',
+            'rooms.*.children.*.first_name' => 'required_with:rooms.*.children|string',
+            'rooms.*.children.*.last_name' => 'required_with:rooms.*.children|string',
         ]);
 
         // On utilise un bloc DB::transaction pour sécuriser la création simultanée User + Booking
@@ -251,9 +256,9 @@ class HotelController extends Controller
                     $temporaryPassword = Str::random(10);
 
                     $user = User::create([
-                        'name'     => ucfirst($firstName) . ' ' . strtoupper($lastName),
-                        'email'    => $validated['customer_email'],
-                        'phone'    => $validated['customer_phone'],
+                        'name' => ucfirst($firstName) . ' ' . strtoupper($lastName),
+                        'email' => $validated['customer_email'],
+                        'phone' => $validated['customer_phone'],
                         'password' => Hash::make($temporaryPassword),
                     ]);
 
@@ -266,26 +271,26 @@ class HotelController extends Controller
 
             // 3. Sauvegarde initiale au statut PENDING_PAYMENT
             $booking = HotelBooking::create([
-                'user_id'             => $userId,
-                'client_ref_num'      => $validated['client_ref'],
-                'product_id'          => $validated['product_id'],
-                'hotel_id'            => $validated['hotel_id'],
-                'session_id'          => $validated['session_id'],
-                'token_id'            => $validated['token_id'],
-                'rate_basis_id'       => $validated['rate_basis_id'],
-                'check_in'            => $validated['check_in'],
-                'check_out'           => $validated['check_out'],
-                'days'                => $validated['days'],
-                'currency'            => $validated['currency'],
-                'net_price'           => $validated['net_price'],
-                'fare_type'           => $validated['fare_type'],
+                'user_id' => $userId,
+                'client_ref_num' => $validated['client_ref'],
+                'product_id' => $validated['product_id'],
+                'hotel_id' => $validated['hotel_id'],
+                'session_id' => $validated['session_id'],
+                'token_id' => $validated['token_id'],
+                'rate_basis_id' => $validated['rate_basis_id'],
+                'check_in' => $validated['check_in'],
+                'check_out' => $validated['check_out'],
+                'days' => $validated['days'],
+                'currency' => $validated['currency'],
+                'net_price' => $validated['net_price'],
+                'fare_type' => $validated['fare_type'],
                 'cancellation_policy' => [],
-                'status'              => 'PENDING_PAYMENT', // <-- Changement de statut de PENDING à PENDING_PAYMENT
-                'customer_email'      => $validated['customer_email'],
-                'customer_phone'      => $validated['customer_phone'],
-                'booking_note'        => $validated['booking_note'] ?? null,
-                'rooms_booked'        => [],
-                'pax_details'         => $validated['rooms'],
+                'status' => 'PENDING_PAYMENT', // <-- Changement de statut de PENDING à PENDING_PAYMENT
+                'customer_email' => $validated['customer_email'],
+                'customer_phone' => $validated['customer_phone'],
+                'booking_note' => $validated['booking_note'] ?? null,
+                'rooms_booked' => [],
+                'pax_details' => $validated['rooms'],
                 // AJOUT CHAMP JSON : Sauvegarde brute de la requête pour exécution future par le Job
                 'api_request_payload' => $validated
             ]);
@@ -304,7 +309,7 @@ class HotelController extends Controller
                 $booking->update(['status' => 'PAYMENT_INITIATION_FAILED']);
 
                 return response()->json([
-                    'status'  => 'error',
+                    'status' => 'error',
                     'message' => 'La passerelle de paiement locale n\'a pas pu générer la demande de débit.'
                 ], 400);
             }
@@ -312,23 +317,24 @@ class HotelController extends Controller
             // 5. Formulation de la réponse dynamique pour Next.js / React
             if (is_array($paymentResult) && isset($paymentResult['type']) && $paymentResult['type'] === 'redirect') {
                 return response()->json([
-                    'status'       => 'redirect_required',
-                    'message'      => 'Redirection vers l\'interface bancaire sécurisée.',
+                    'status' => 'redirect_required',
+                    'message' => 'Redirection vers l\'interface bancaire sécurisée.',
                     'redirect_url' => $paymentResult['redirect_url'],
-                    'booking_id'   => $booking->id
+                    'booking_id' => $booking->id
                 ], 200);
             }
 
             return response()->json([
-                'status'     => 'waiting_confirmation',
-                'message'    => 'Demande de paiement envoyée. Veuillez valider le prompt USSD de confirmation sur votre téléphone.',
+                'status' => 'waiting_confirmation',
+                'message' => 'Demande de paiement envoyée. Veuillez valider le prompt USSD de confirmation sur votre téléphone.',
                 'booking_id' => $booking->id,
-                'session_id'=>$booking->session_id
+                'session_id' => $booking->session_id
             ], 200);
         });
 
         return $response;
     }
+
     /**
      * Récupère le statut en temps réel d'une réservation d'hôtel pour le polling du Front-end.
      *
@@ -347,8 +353,8 @@ class HotelController extends Controller
             if (!$booking) {
                 return response()->json([
                     'booking_status' => 'initiation_failed',
-                    'message'        => 'Réservation introuvable ou identifiant invalide.',
-                    'pnr'            => null
+                    'message' => 'Réservation introuvable ou identifiant invalide.',
+                    'pnr' => null
                 ], 404);
             }
 
@@ -357,7 +363,7 @@ class HotelController extends Controller
             $status = strtolower($booking->status);
 
             // Correspondance des messages utilisateurs selon l'état actuel
-            $message = match($booking->status) {
+            $message = match($booking->status){
             'PENDING_PAYMENT', 'WAITING_PIN' => 'En attente de votre validation PIN sur votre terminal mobile.',
             'PROCESSING'                     => 'Paiement reçu ! Sécurisation de vos chambres auprès de l\'hôtel...',
             'CONFIRMED', 'TICKETED'          => 'Votre séjour a été confirmé avec succès auprès de l’établissement.',
@@ -368,13 +374,13 @@ class HotelController extends Controller
 
         // 4. Réponse JSON propre pour le polling
         return response()->json([
-            'booking_id'     => $booking->id,
+            'booking_id' => $booking->id,
             'booking_status' => $booking->status, // Renvoie par ex: PENDING_PAYMENT, PROCESSING, CONFIRMED, FAILED
-            'pnr'            => $booking->reference_num, // Le numéro de confirmation pour le voyageur
-            'message'        => $message,
-            'currency'       => $booking->currency,
-            'net_price'      => $booking->net_price,
-            'updated_at'     => $booking->updated_at->toIso8601String(),
+            'pnr' => $booking->reference_num, // Le numéro de confirmation pour le voyageur
+            'message' => $message,
+            'currency' => $booking->currency,
+            'net_price' => $booking->net_price,
+            'updated_at' => $booking->updated_at->toIso8601String(),
         ], 200);
 
     } catch (Exception $e) {
@@ -382,8 +388,8 @@ class HotelController extends Controller
 
             return response()->json([
                 'booking_status' => 'FAILED',
-                'message'        => 'Une erreur technique interne est survenue lors de la récupération du statut.',
-                'pnr'            => null
+                'message' => 'Une erreur technique interne est survenue lors de la récupération du statut.',
+                'pnr' => null
             ], 500);
         }
     }
@@ -407,7 +413,7 @@ class HotelController extends Controller
             // 3. Transformation via le Resource API pour correspondre au typage Next.js
             return response()->json([
                 'success' => true,
-                'data'    => CustomerBookingResource::collection($bookings)
+                'data' => CustomerBookingResource::collection($bookings)
             ], 200);
 
         } catch (Exception $e) {
@@ -416,9 +422,88 @@ class HotelController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Une erreur interne est survenue lors de la récupération de vos réservations.',
-                'data'    => []
+                'data' => []
             ], 500);
         }
     }
 
+    public function filterHotels(Request $request, HotelService $service): JsonResponse
+    {
+        $request->validate([
+            'session_id' => 'required|string',
+            'max_result' => 'sometimes|integer|min:1|max:100',
+            'filters' => 'sometimes|array',
+            'filters.price' => 'sometimes|array',
+            'filters.price.min' => 'sometimes|numeric|min:0',
+            'filters.price.max' => 'sometimes|numeric|gt:filters.price.min',
+            'filters.rating' => 'sometimes|array',
+            'filters.rating.*' => 'integer|between:1,5',
+            'filters.tripadvisor_rating' => 'sometimes|array',
+            'filters.tripadvisor_rating.*' => 'numeric|between:1,5',
+            'filters.hotel_name' => 'sometimes|string',
+            'filters.fare_type' => 'sometimes|string|in:Refundable,Non-Refundable',
+            'filters.property_type' => 'sometimes|string',
+            'filters.facilities' => 'sometimes|array',
+            'filters.facilities.*' => 'string',
+            'filters.sorting' => 'sometimes|string|in:price-low-high,price-high-low',
+            'filters.locality' => 'sometimes|array',
+            'filters.locality.*' => 'string',
+        ]);
+
+        $result = $service->filterHotels($request->all());
+
+        // Cas "no_results" → 200 avec liste vide (pas une erreur HTTP)
+        if (!$result['success'] && $result['type'] === 'no_results') {
+            return response()->json([
+                'success' => false,
+                'type' => 'no_results',
+                'message' => $result['error_message'],
+                'hotels' => [],
+                'status' => $result['status'],
+            ], 200);
+        }
+
+        if (!$result['success']) {
+            $status = match($result['type']){
+            'validation_error' => 422,
+            default            => 500,
+        };
+
+        return response()->json([
+            'message' => $result['error_message'],
+            'error_code' => $result['error_code'] ?? null,
+            'type' => $result['type'],
+        ], $status);
+    }
+
+        return response()->json($result, 200);
+
+    }
+    public function getBookingDetails(Request $request, HotelService $service): JsonResponse
+    {
+        $request->validate([
+            'supplier_confirmation_num' => 'required|string',
+            'reference_num'             => 'required|string',
+        ]);
+
+        $result = $service->getBookingDetails(
+            $request->input('supplier_confirmation_num'),
+            $request->input('reference_num'),
+    );
+
+        if (!$result['success']) {
+            $status = match($result['type']) {
+            'validation_error' => 422,
+            'api_error'        => 400,
+            default            => 500,
+        };
+
+        return response()->json([
+            'message' => $result['error_message'],
+            'type'    => $result['type'],
+        ], $status);
+    }
+
+        return response()->json($result['booking'], 200);
+    }
 }

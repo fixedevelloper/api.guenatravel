@@ -93,7 +93,7 @@ class TravelOproService
                 'multipleBrandedFares'  => true,
             ];
 
-            logger(json_encode($payload));
+        //    logger(json_encode($payload));
 
             try {
                 $response = Http::withHeaders([

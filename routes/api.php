@@ -53,6 +53,8 @@ Route::get('/hotels/details', [HotelController::class, 'getHotelDetails']);
 Route::get('/hotels/bookings-status/{id}', [HotelController::class, 'getBookingStatus']);
 Route::get('/airports/search', [SearchController::class, 'search']);
 Route::post('/hotels/book', [HotelController::class, 'bookHotel']);
+Route::post('/hotels/filter', [HotelController::class, 'filterHotels']);
+Route::post('/hotels/booking-details', [HotelController::class, 'getBookingDetails']);
 Route::prefix('flights')->group(function () {
     Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
     Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
