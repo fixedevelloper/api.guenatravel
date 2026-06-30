@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Host;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\PropertyHostResource;
 use App\Http\Resources\PropertyResource;
 use App\Models\Amenity;
 use App\Models\Property;
@@ -32,7 +33,7 @@ class HostPropertyController extends Controller
 
         // Retourne directement la collection. Laravel injectera automatiquement
         // les clés 'meta' et 'links' pour la pagination.
-        return PropertyResource::collection($properties);
+        return PropertyHostResource::collection($properties);
     }
 
     /**
@@ -161,7 +162,7 @@ class HostPropertyController extends Controller
         // Eager loading des chambres et fichiers médias (photos de l'hôtel)
         $property->load(['rooms', 'media']);
 
-        return new PropertyResource($property);
+        return new PropertyHostResource($property);
     }
 
     /**

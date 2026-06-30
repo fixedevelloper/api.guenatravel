@@ -1,6 +1,13 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminDashboardController;
+use App\Http\Controllers\Admin\AirportController;
 use App\Http\Controllers\Admin\AmenityController;
+use App\Http\Controllers\Admin\FlightBookingController;
+use App\Http\Controllers\Admin\HostController;
+use App\Http\Controllers\Admin\HotelBookingController;
+use App\Http\Controllers\Admin\SettingController;
+use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\CustomerDashboardController;
 use App\Http\Controllers\FavoriteController;
 use App\Http\Controllers\Flight\CustomerFlightBookingController;
@@ -55,6 +62,7 @@ Route::get('/airports/search', [SearchController::class, 'search']);
 Route::post('/hotels/book', [HotelController::class, 'bookHotel']);
 Route::post('/hotels/filter', [HotelController::class, 'filterHotels']);
 Route::post('/hotels/booking-details', [HotelController::class, 'getBookingDetails']);
+Route::get('/hotels/more-results', [HotelController::class, 'getMoreResults']);
 Route::prefix('flights')->group(function () {
     Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
     Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
@@ -158,8 +166,17 @@ Route::middleware(['auth:sanctum', 'role:host'])->prefix('host')->group(function
 */
 Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin')->group(function () {
     Route::get('/withdrawals', [AdminWithdrawalController::class, 'index']);
+    Route::get('/dashboard', [AdminDashboardController::class, 'index']);
     Route::patch('/withdrawals/{withdrawal}/process', [AdminWithdrawalController::class, 'process']);
     Route::get('/commissions', [AdminWithdrawalController::class, 'commissionsDashboard']);
+    Route::get('/flights', [FlightBookingController::class, 'index']);
+    Route::get('/hotels', [HotelBookingController::class, 'index']);
+    Route::get('/properties', [\App\Http\Controllers\Admin\PropertyController::class, 'index']);
+    Route::get('/hosts', [HostController::class, 'index']);
+    Route::get('/users', [UserController::class, 'index']);
+    Route::get('/airports', [AirportController::class, 'index']);
+    Route::get('/settings', [SettingController::class, 'index']);
+    Route::put('/settings', [SettingController::class, 'update']);
 });
 
 /*

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Host;
 
 
 use App\Http\Controllers\Controller;
+use App\Models\HotelBooking;
 use Illuminate\Http\Request;
 use App\Models\Booking;
 use Illuminate\Support\Facades\DB;
@@ -15,7 +16,6 @@ class HostBookingController extends Controller
     {
         $host = $request->user();
 
-        // 1. Filtrer les établissements de l'hôte
         $propertyIds = DB::table('properties')
             ->where('host_id', $host->id)
             ->whereNull('deleted_at')
@@ -23,26 +23,38 @@ class HostBookingController extends Controller
             ->toArray();
 
         if (empty($propertyIds)) {
-            return response()->json([
-                'success' => true,
-                'data' => []
-            ]);
+            return response()->json(['success' => true, 'data' => []]);
         }
 
-        // 2. Extraire toutes les réservations attachées
-        $bookings = Booking::with([
-            'guest:id,name,email,phone_number',
-            'items.room.property'
-        ])
-            ->whereHas('items.room', function ($query) use ($propertyIds) {
-                $query->whereIn('property_id', $propertyIds);
-            })
-            ->orderBy('created_at', 'desc')
-            ->paginate(15);
+        $status = $request->query('status');
+
+        $query = HotelBooking::whereIn('hotel_id', $propertyIds)
+            ->orderBy('created_at', 'desc');
+
+        if ($status) {
+            $query->where('status', $status);
+        }
+
+        $bookings = $query->paginate(15);
+
+        // Enrichit chaque booking avec les infos property + room
+        $properties = DB::table('properties')
+            ->whereIn('id', $propertyIds)
+            ->get(['id', 'name', 'city'])
+            ->keyBy('id');
+
+        $bookings->getCollection()->transform(function ($booking) use ($properties) {
+            $property = $properties[$booking->hotel_id] ?? null;
+
+            $booking->property_name = $property?->name;
+        $booking->property_city = $property?->city;
+
+        return $booking;
+    });
 
         return response()->json([
             'success' => true,
-            'data' => $bookings
+            'data'    => $bookings,
         ]);
     }
 

@@ -5,7 +5,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\BelongsTo; // <-- Ajoute cette ligne
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class FlightBooking extends Model
 {
     protected $fillable = [

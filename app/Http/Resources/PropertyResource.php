@@ -5,56 +5,73 @@ namespace App\Http\Resources;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
+/**
+ * @property-read string $hotel_id
+ * @property-read string $twx_hotel_id
+ * @property-read string $product_id
+ * @property-read string $token_id
+ * @property-read string $name
+ * @property-read int $rating
+ * @property-read string $property_type
+ * @property-read string $fare_type
+ * @property-read float $total
+ * @property-read string $currency
+ * @property-read string $city
+ * @property-read string $locality
+ * @property-read string $country
+ * @property-read string $address
+ * @property-read string|null $postal_code
+ * @property-read string|null $phone
+ * @property-read string|null $email
+ * @property-read float $latitude
+ * @property-read float $longitude
+ * @property-read array|object $distance
+ * @property-read string|null $thumbnail
+ * @property-read array $facilities
+ * @property-read array|object $trip_advisor
+ */
 class PropertyResource extends JsonResource
 {
     /**
-     * Transform the resource into an array.
-     * @param Request $request
-     * @return array
+     * Transforme la ressource en tableau optimisé pour le front-end TypeScript.
+     *
+     * @param  Request  $request
+     * @return array<string, mixed>
      */
     public function toArray(Request $request): array
     {
         return [
-            'id' => $this->id,
-            'uuid' => $this->uuid,
-            'type' => $this->type,
-            'name' => $this->getTranslations('name'),
-            'description' => $this->getTranslations('description'),
-            'cancellation_policy' => $this->getTranslations('cancellation_policy'),
-            'location' => [
-                'address_line_1' => $this->address_line_1,
-                'city' => $this->city,
-                'postal_code'=>$this->postal_code,
-                'state_province'=>$this->state_province,
-                'country_code' => $this->country_code,
-                'coordinates' => [
-                    'lat' => (float) $this->latitude,
-                    'lng' => (float) $this->longitude,
-                ]
+            'hotel_id'      => (string) $this->id,
+            'twx_hotel_id'  => (string) $this->twx_hotel_id,
+            'product_id'    => (string) $this->uuid,
+            'token_id'      => (string) $this->token_id,
+            'name'          => (string) $this->name,
+            'rating'        => (int) $this->rating,
+            'property_type' => (string) $this->type,
+            'fare_type'     => (string) $this->fare_type,
+            'total'         => (float) $this->minPrice,
+            'currency'      => (string) $this->currency,
+            'city'          => (string) $this->city,
+            'locality'      => (string) $this->locality,
+            'country'       => (string) $this->country,
+            'address'       => (string) $this->address,
+            'postal_code'   => $this->postal_code,
+            'phone'         => $this->phone,
+            'email'         => $this->email,
+            'latitude'      => (float) $this->latitude,
+            'longitude'     => (float) $this->longitude,
+            'distance'      => [
+                'value' => (float) ($this->distance['value'] ?? $this->distance->value ?? 0),
+                'unit'  => (string) ($this->distance['unit'] ?? $this->distance->unit ?? 'km'),
             ],
-            'price_range' => [
-                'min' => $this->minPrice ?? 0,
-                'max' => $this->maxPrice ?? 0,
+            'thumbnail'     => $this->getFirstMediaUrl('cover', 'thumbnail'),
+          'facilities' => $this->relationLoaded('amenities')
+        ? $this->amenities->pluck('name')->toArray()
+        : [],
+            'trip_advisor'  => [
+                'rating'  => $this->trip_advisor['rating'] ?? $this->trip_advisor->rating ?? null,
+                'reviews' => $this->trip_advisor['reviews'] ?? $this->trip_advisor->reviews ?? null,
             ],
-            'media' => [
-                'cover' => $this->getFirstMediaUrl('cover', 'thumbnail'),
-                'gallery' => $this->getMedia('gallery')->map(fn($media) => $media->getUrl()),
-            ],
-            'rooms_count' => $this->whenCounted('rooms'),
-            'amenities' => AmenityResource::collection($this->whenLoaded('amenities')),
-            'rooms' => RoomResource::collection($this->whenLoaded('rooms')),
-            'created_at' => $this->created_at->toDateTimeString(),
-        ];
-    }
-
-    /**
-     * Ajouter des données supplémentaires à la réponse de la collection.
-     * Ces données n'apparaissent qu'au premier niveau du JSON.
-     */
-    public function with(Request $request): array
-    {
-        return [
-            'success' => true,
         ];
     }
 }

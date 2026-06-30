@@ -6,8 +6,11 @@ namespace App\Http\Controllers\Flight;
 use App\Events\UserAutoRegistered;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\CustomerBookingResource;
+use App\Http\Resources\PropertyDetailResource;
+use App\Http\Resources\RoomResource;
 use App\Models\HotelBooking;
 use App\Models\HotelCity;
+use App\Models\Property;
 use App\Models\User;
 use App\Services\HotelService;
 use App\Services\Travelport\PaymentService;
@@ -44,6 +47,7 @@ class HotelController extends Controller
             'nationality' => 'required|string|size:2',
             'currency' => 'sometimes|string|size:3',
             'radius' => 'sometimes|integer|min:1|max:100',
+            'travel_class' => 'sometimes|string|in:Economy,PremiumEconomy,Business,First',
             'max_result' => 'sometimes|integer|min:1|max:100',
             'city_name' => 'sometimes|string',
             'country_name' => 'sometimes|string',
@@ -127,7 +131,45 @@ class HotelController extends Controller
             'cities' => $cities,
         ]);
     }
+    public function getMoreResults(Request $request, HotelService $service): JsonResponse
+    {
+        $request->validate([
+            'session_id' => 'required|string',
+            'next_token' => 'required|string',
+            'max_result' => 'sometimes|integer|min:1|max:100',
+        ]);
 
+        $result = $service->getMoreResults(
+            $request->input('session_id'),
+            $request->input('next_token'),
+            $request->integer('max_result', 20),
+    );
+
+        if (!$result['success'] && $result['type'] === 'no_more_results') {
+            return response()->json([
+                'success' => false,
+                'type'    => 'no_more_results',
+                'message' => $result['error_message'],
+                'hotels'  => [],
+                'status'  => $result['status'],
+            ], 200);
+        }
+
+        if (!$result['success']) {
+            $status = match($result['type']) {
+            'validation_error' => 422,
+            default            => 500,
+        };
+
+        return response()->json([
+            'message'    => $result['error_message'],
+            'error_code' => $result['error_code'] ?? null,
+            'type'       => $result['type'],
+        ], $status);
+    }
+
+        return response()->json($result, 200);
+    }
     public function getRoomRates(Request $request, HotelService $service): JsonResponse
     {
         // 1. Validation stricte des Query Params issus du GET Axios
@@ -136,8 +178,24 @@ class HotelController extends Controller
             'product_id' => 'required|string',
             'token_id' => 'required|string',
             'hotel_id' => 'required|string',
+            'is_local'   => 'nullable|string',
         ]);
 
+        if (filter_var($request->input('is_local'), FILTER_VALIDATE_BOOLEAN)) {
+            $property = Property::find($request->input('hotel_id'));
+
+            if (!$property) {
+                return response()->json([
+                    'message' => 'Hôtel local introuvable.',
+                    'type'    => 'not_found'
+                ], 404);
+            }
+
+            return response()->json([
+                'session_id' => $validated['session_id'],
+                'room_rates' => RoomResource::collection($property->rooms) ?? [],
+            ], 200);
+        }
         // 2. Appel du service avec les données validées et nettoyées
         $result = $service->getRoomRates(
             $validated['session_id'],
@@ -173,33 +231,56 @@ class HotelController extends Controller
 
     public function getHotelDetails(Request $request, HotelService $service): JsonResponse
     {
-        $request->validate([
+        // 1. Validation stricte des données d'entrée
+        $validated = $request->validate([
             'session_id' => 'required|string',
-            'hotel_id' => 'required|string',
+            'hotel_id'   => 'required|string',
             'product_id' => 'required|string',
-            'token_id' => 'required|string',
+            'token_id'   => 'required|string',
+            'is_local'   => 'nullable|string', // Précisé en string pour le check 'true'
         ]);
 
+        // 2. CAS LOCAL : Récupération depuis la base de données locale
+        // Utilisation de filter_var pour gérer proprement le booléen sous forme de chaîne "true"
+        if (filter_var($request->input('is_local'), FILTER_VALIDATE_BOOLEAN)) {
+            $property = Property::find($request->input('hotel_id'));
+
+            if (!$property) {
+                return response()->json([
+                    'message' => 'Hôtel local introuvable.',
+                    'type'    => 'not_found'
+                ], 404);
+            }
+
+            return response()->json(new PropertyDetailResource($property), 200);
+        }
+
+        // 3. CAS API EXTERNE : Appel du service de réservation
         $result = $service->getHotelDetails(
             $request->input('session_id'),
             $request->input('hotel_id'),
             $request->input('product_id'),
-            $request->input('token_id'),
-    );
+            $request->input('token_id')
+        );
 
+        // 4. Gestion des erreurs du service externe
         if (!$result['success']) {
-            $status = match($result['type']){
+            $status = match($result['type'] ?? 'default') {
             'validation_error' => 422,
+            'not_found'        => 404,
             default            => 500,
         };
 
         return response()->json([
-            'message' => $result['error_message'],
+            'message'    => $result['error_message'] ?? 'Une erreur externe est survenue.',
             'error_code' => $result['error_code'] ?? null,
-            'type' => $result['type'],
+            'type'       => $result['type'] ?? 'server_error',
         ], $status);
     }
 
+        // 5. Retour de l'hôtel externe standardisé
+        // Si $result['hotel'] est un modèle ou un tableau compatible, passe-le dans ta ressource
+        // pour que le front Next.js reçoive EXACTEMENT la même structure qu'en local.
         return response()->json($result['hotel'], 200);
     }
 
@@ -209,14 +290,15 @@ class HotelController extends Controller
         $validated = $request->validate([
             'session_id' => 'required|string',
             'product_id' => 'required|string',
+            'is_local' => 'required|string',
             'token_id' => 'required|string',
-            'rate_basis_id' => 'required|string',
+            'rate_basis_id' => 'nullable|string',
             'client_ref' => 'required|string',
             'customer_email' => 'required|email',
             'customer_phone' => 'required|string',
             'booking_note' => 'sometimes|string|nullable',
 
-            // Champs obligatoires pour la table locale (à ajouter à la validation ou à envoyer du front)
+            // Champs de séjour et tarification
             'hotel_id' => 'required|string',
             'check_in' => 'required|date_format:Y-m-d',
             'check_out' => 'required|date_format:Y-m-d',
@@ -224,8 +306,19 @@ class HotelController extends Controller
             'currency' => 'required|string|size:3',
             'net_price' => 'required|numeric|min:0',
             'fare_type' => 'required|string',
-            'payment_method' => 'required|string', // requis pour l'initiation du paiement
 
+            // --- VALIDATION SÉCURISÉE DES MOYENS DE PAIEMENT DYNAMIQUES ---
+            'payment_method' => 'required|in:card,momo',
+            'mobile_operator' => 'required_if:payment_method,momo|nullable|in:orange,mtn',
+            'payment_phone' => 'required_if:payment_method,momo|nullable|string',
+
+            // Validation des détails de la carte (uniquement si payment_method est 'card')
+            'card_details' => 'required_if:payment_method,card|array|nullable',
+            'card_details.number' => 'required_if:payment_method,card|string|min:13|max:19',
+            'card_details.expiry' => 'required_if:payment_method,card|string|size:5', // MM/AA
+            'card_details.cvc' => 'required_if:payment_method,card|string|min:3|max:4',
+
+            // Structure des voyageurs (inchangée)
             'rooms' => 'required|array|min:1',
             'rooms.*.room_no' => 'required|integer|min:1',
             'rooms.*.adults' => 'required|array|min:1',
@@ -238,7 +331,7 @@ class HotelController extends Controller
             'rooms.*.children.*.last_name' => 'required_with:rooms.*.children|string',
         ]);
 
-        // On utilise un bloc DB::transaction pour sécuriser la création simultanée User + Booking
+        // Utilisation d'un bloc DB::transaction
         $response = DB::transaction(function () use ($validated) {
 
             // 2. Gestion de l'utilisateur (Connexion ou Inscription automatique)
@@ -248,7 +341,6 @@ class HotelController extends Controller
                 $user = User::where('email', $validated['customer_email'])->first();
 
                 if (!$user) {
-                    // Extraction sécurisée du premier passager adulte pour le nom du profil
                     $primaryPassenger = $validated['rooms'][0]['adults'][0] ?? null;
                     $firstName = $primaryPassenger ? $primaryPassenger['first_name'] : 'Client';
                     $lastName = $primaryPassenger ? $primaryPassenger['last_name'] : 'Voyage';
@@ -262,7 +354,6 @@ class HotelController extends Controller
                         'password' => Hash::make($temporaryPassword),
                     ]);
 
-                    // Déclenchement de l'événement d'envoi d'email avec les identifiants
                     event(new UserAutoRegistered($user, $temporaryPassword));
                 }
 
@@ -277,7 +368,7 @@ class HotelController extends Controller
                 'hotel_id' => $validated['hotel_id'],
                 'session_id' => $validated['session_id'],
                 'token_id' => $validated['token_id'],
-                'rate_basis_id' => $validated['rate_basis_id'],
+                'rate_basis_id' => $validated['rate_basis_id'] ?? '0200',
                 'check_in' => $validated['check_in'],
                 'check_out' => $validated['check_out'],
                 'days' => $validated['days'],
@@ -285,45 +376,55 @@ class HotelController extends Controller
                 'net_price' => $validated['net_price'],
                 'fare_type' => $validated['fare_type'],
                 'cancellation_policy' => [],
-                'status' => 'PENDING_PAYMENT', // <-- Changement de statut de PENDING à PENDING_PAYMENT
+                'status' => 'PENDING_PAYMENT',
                 'customer_email' => $validated['customer_email'],
                 'customer_phone' => $validated['customer_phone'],
                 'booking_note' => $validated['booking_note'] ?? null,
                 'rooms_booked' => [],
                 'pax_details' => $validated['rooms'],
-                // AJOUT CHAMP JSON : Sauvegarde brute de la requête pour exécution future par le Job
                 'api_request_payload' => $validated
             ]);
 
-            // 4. Appel à la passerelle de paiement locale (Mobile Money / Carte locale)
+            // 4. Détermination des variables de routage du paiement
+            // Si c'est MoMo, on utilise le 'payment_phone' (souvent spécifique), sinon le numéro client
+            $phoneToDebit = $validated['payment_method'] === 'momo'
+                ? $validated['payment_phone']
+                : $validated['customer_phone'];
+
+            // 5. Appel à la passerelle de paiement mis à jour
             $paymentResult = $this->paymentService->initiateLocalPayment(
-                $validated['payment_method'],
-                $validated['customer_phone'],
+                $validated['payment_method'], // 'card' ou 'momo'
+                $phoneToDebit,
                 $validated['net_price'],
                 $booking->id,
-                $validated['currency']
+                $validated['currency'],
+                [
+                    'mobile_operator' => $validated['mobile_operator'] ?? null,
+                    'card_details'    => $validated['card_details'] ?? null
+                ]
             );
 
             if (!$paymentResult) {
-                // Le statut passe en échec d'initiation si la passerelle MM/bancaire est injoignable
                 $booking->update(['status' => 'PAYMENT_INITIATION_FAILED']);
 
                 return response()->json([
                     'status' => 'error',
-                    'message' => 'La passerelle de paiement locale n\'a pas pu générer la demande de débit.'
+                    'message' => 'La passerelle de paiement locale n\'a pas pu traiter la transaction.'
                 ], 400);
             }
 
-            // 5. Formulation de la réponse dynamique pour Next.js / React
+            // 6. Formulation de la réponse dynamique pour Next.js
+            // Cas A : Redirection requise (Toujours le cas pour une Carte, ou certaines interfaces MoMo)
             if (is_array($paymentResult) && isset($paymentResult['type']) && $paymentResult['type'] === 'redirect') {
                 return response()->json([
                     'status' => 'redirect_required',
-                    'message' => 'Redirection vers l\'interface bancaire sécurisée.',
+                    'message' => 'Redirection vers l\'interface sécurisée du prestataire.',
                     'redirect_url' => $paymentResult['redirect_url'],
                     'booking_id' => $booking->id
                 ], 200);
             }
 
+            // Cas B : Paiement asynchrone Direct MoMo (Push USSD)
             return response()->json([
                 'status' => 'waiting_confirmation',
                 'message' => 'Demande de paiement envoyée. Veuillez valider le prompt USSD de confirmation sur votre téléphone.',

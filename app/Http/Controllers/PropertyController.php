@@ -34,7 +34,6 @@ class PropertyController extends Controller
             $q->where('type', $request->type);
         });
 
-        logger($query->latest()->get());
         return response()->json([
             'success' => true,
             'meta'    => ['total' => $query->count()],

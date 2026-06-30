@@ -116,7 +116,7 @@ class HotelService
 
         // Si le voyageur ne spécifie pas sa nationalité, on assume que c'est celle de son pays de connexion
         'nationality'      => $params['nationality'] ?? $context['country_code'],
-
+        'class'=>$params['travel_class'],
         'checkin'          => $params['checkin'],
         'checkout'         => $params['checkout'],
         'latitude'         => $params['latitude'],
@@ -171,6 +171,57 @@ class HotelService
         'hotels'  => $this->parseHotels($data['itineraries']),
     ];
 }
+    public function getMoreResults(string $sessionId, string $nextToken, int $maxResult = 20): array
+    {
+        $response = Http::timeout(20)->get(
+            'https://travelnext.works/api/hotel-api-v6/moreResults',
+            [
+                'sessionId' => $sessionId,
+                'nextToken' => $nextToken,
+                'maxResult' => $maxResult,
+            ]
+        );
+
+        $data = $response->json();
+
+        if (isset($data['Errors'])) {
+            return [
+                'success'       => false,
+                'type'          => 'validation_error',
+                'error_code'    => $data['Errors']['ErrorCode']    ?? null,
+                'error_message' => $data['Errors']['ErrorMessage'] ?? 'Erreur inconnue',
+            ];
+        }
+
+        // Erreur dans status (ex: fin de pagination)
+        if (isset($data['status']['error']) && !empty($data['status']['error'])) {
+            return [
+                'success'       => false,
+                'type'          => 'no_more_results',
+                'error_message' => $data['status']['error'],
+                'hotels'        => [],
+                'status'        => [
+                    'session_id'   => $sessionId,
+                    'more_results' => false,
+                    'next_token'   => null,
+                ],
+            ];
+        }
+
+        if (!isset($data['itineraries'])) {
+            return [
+                'success'       => false,
+                'type'          => 'invalid_response',
+                'error_message' => 'Réponse inattendue de l\'API.',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'status'  => $this->parseSearchStatus($data['status'] ?? []),
+            'hotels'  => $this->parseHotels($data['itineraries']),
+        ];
+    }
     public function getHotelDetails(
         string $sessionId,
         string $hotelId,

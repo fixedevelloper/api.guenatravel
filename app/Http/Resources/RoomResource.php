@@ -8,60 +8,55 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class RoomResource extends JsonResource
 {
     /**
-     * Transform the resource into an array.
+     * Transforme les données d'une chambre en format JSON strict.
      *
+     * @param  Request  $request
      * @return array<string, mixed>
      */
     public function toArray(Request $request): array
     {
-        // Récupération de la locale courante (ex: 'fr' ou 'en')
+        // On récupère la langue actuelle de l'application (ex: 'fr' ou 'en')
         $locale = app()->getLocale();
 
         return [
-            'id' => $this->id,
-            'property_id' => $this->property_id,
+            // Pour le cas local, ces IDs d'API externes n'existent pas sur le modèle Room,
+            // on renvoie l'ID de la chambre ou des valeurs fallback pour TypeScript
+            'product_id'          => (string) ($this->product_id ?? $this->id),
+            'token_id'            => (string) ($this->token_id ?? 'local_token'),
 
-            // Gestion de la traduction : Clé localisée ou fallback sur la valeur brute
-            'name' => $this->name,
-            'description' => $this->description,
+            // CORRECTION : Extraction de la bonne chaîne multilingue selon la locale
+            'room_type'           => is_array($this->name)
+                ? ($this->name[$locale] ?? $this->name['en'] ?? '')
+                : (string) $this->name,
 
-            // Si vous avez besoin de récupérer l'intégralité des traductions (ex: pour un formulaire d'édition)
-            'translations' => [
-                'name' => $this->name,
-                'description' => $this->description,
-            ],
+            'description'         => is_array($this->description)
+                ? ($this->description[$locale] ?? $this->description['en'] ?? '')
+                : (string) $this->description,
 
-            // Capacités et inventaire
-            'base_occupancy' => $this->base_occupancy,
-            'max_occupancy' => $this->max_occupancy,
-            'max_children' => $this->max_children,
-            'total_inventory' => $this->total_inventory,
+            'room_code'           => (string) ($this->room_code ?? 'ROOM-' . $this->id),
+            'fare_type'           => (string) ($this->fare_type ?? 'STANDARD'),
+            'rate_basis_id'       => (string) ($this->rate_basis_id ?? ''),
+            'currency'            => (string) ($this->currency ?? 'XAF'),
+            'net_price'           => (float) $this->default_price_per_night,
+            'board_type'          => (string) ($this->board_type ?? 'RO'), // Room Only par défaut
+            'max_occupancy'       => (int) $this->max_occupancy,
+            'inventory_type'      => (string) ($this->inventory_type ?? 'HOTEL'),
+            'cancellation_policy' => (array) ($this->cancellation_policy ?? ['Annulation gratuite disponible']),
 
-            // Tarification (formaté proprement pour l'affichage/API)
-            'default_price_per_night' => (float) $this->default_price_per_night,
-            'is_active' => $this->is_active,
+            'room_images'         => $this->relationLoaded('media')
+                ? $this->getMedia('room_photos')->map(function ($media) {
+                    return $media->getUrl();
+                })->toArray()
+                : [],
 
-            // Relations chargées de manière conditionnelle (optimisation des requêtes)
-            'property' => new PropertyResource($this->whenLoaded('property')),
-            'amenities' => AmenityResource::collection($this->whenLoaded('amenities')),
-            'calendars' => RoomCalendarResource::collection($this->whenLoaded('calendars')),
-
-            // Gestion des médias avec Spatie MediaLibrary
-            'images' => $this->when($this->relationLoaded('media'), function () {
-                return $this->getMedia('room_photos')->map(function ($media) {
-                    return [
-                        'id' => $media->id,
-                        'url' => $media->getUrl(),
-                        'thumbnail' => $media->getUrl('thumbnail'),
-                        'mime_type' => $media->mime_type,
-                        'size' => $media->size,
-                    ];
-                });
-            }),
-
-            // Timestamps
-            'created_at' => $this->created_at?->toIso8601String(),
-            'updated_at' => $this->updated_at?->toIso8601String(),
+            // CORRECTION : Extraction du nom traduit des équipements si 'name' est aussi un array
+            'facilities' => $this->relationLoaded('amenities')
+                ? $this->amenities->map(function ($amenity) use ($locale) {
+                    return is_array($amenity->name)
+                        ? ($amenity->name[$locale] ?? $amenity->name['fr'] ?? '')
+                        : $amenity->name;
+                })->toArray()
+                : [],
         ];
     }
 }

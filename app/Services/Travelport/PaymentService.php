@@ -28,7 +28,7 @@ class PaymentService
      * @param string $currency La devise cible (XAF, XOF, EUR, USD)
      * @return array|bool URL de redirection pour les cartes, ou Booléen de succès pour le Push USSD
      */
-    public function initiateLocalPayment(string $paymentMethod, ?string $phoneNumber, float $amountToDebit, int $bookingId, string $currency = 'XAF')
+    public function initiateLocalPayment(string $paymentMethod, ?string $phoneNumber, float $amountToDebit, int $bookingId, string $currency = 'XAF', $cardData=[])
     {
         try {
             // 1. Détection automatique du pays (CM, CI, SN, GA)
