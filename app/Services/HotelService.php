@@ -25,7 +25,7 @@ class HotelService
     public function getStaticHotel(array $params): array
     {
         try {
-            $response = Http::timeout(20)->get(
+            $response = Http::timeout(60)->get(
                 'https://travelnext.works/api/hotel-api-v6/hotelDetails',
                 array_merge($this->authData, [
                     'from'         => $params['from'] ?? '1',
@@ -228,7 +228,7 @@ class HotelService
         string $productId,
         string $tokenId
     ): array {
-        $response = Http::timeout(20)->get(
+        $response = Http::timeout(60)->get(
             'https://travelnext.works/api/hotel-api-v6/hotelDetails',
             array_merge($this->authData, [
                 'sessionId' => $sessionId,
@@ -300,7 +300,7 @@ class HotelService
             'hotelId'   => $hotelId,
         ]);
 
-        $response = Http::timeout(20)->post(
+        $response = Http::timeout(60)->post(
             'https://travelnext.works/api/hotel-api-v6/get_room_rates',
             $payload
         );

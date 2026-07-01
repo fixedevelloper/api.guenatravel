@@ -27,4 +27,8 @@ class FlightPassenger extends Model
     {
         return $this->belongsTo(FlightBooking::class, 'flight_booking_id');
     }
+    public function services()
+    {
+        return $this->hasMany(FlightPassengerService::class, 'flight_passenger_id');
+    }
 }

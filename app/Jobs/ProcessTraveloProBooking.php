@@ -26,7 +26,8 @@ class ProcessTraveloProBooking implements ShouldQueue
 
 public function handle(TravelOproService $travelOproService): void
 {
-    $booking = FlightBooking::with(['trips', 'passengers'])->find($this->bookingId);
+    // 🟢 CHARGEMENT DES SÉRIES ET DES SERVICES RATTACHÉS AUX PASSAGERS
+    $booking = FlightBooking::with(['trips', 'passengers.services'])->find($this->bookingId);
 
     if (!$booking || in_array($booking->booking_status, ['ticketed', 'hold', 'gds_failed'])) {
         Log::info("[TravelOpro Job] Réservation #{$this->bookingId} ignorée.");
@@ -48,15 +49,13 @@ public function handle(TravelOproService $travelOproService): void
             $fareSourceCodeInbound = $selectedFlight->travelport['gds_authority_value_inbound'] ?? null;
         }
 
-        // --- 1. Initialisation des types et de la sous-structure colonnaire ---
-// --- 1. Initialisation des types et de la sous-structure colonnaire complète ---
         $typeMapping = [
             'ADT' => 'adult',
             'CHD' => 'child',
             'INF' => 'infant'
         ];
 
-// Structure par défaut alignée sur votre JSON d'exemple (incluant les clés de services/sièges vides pour éviter les crashs)
+        // Structure de base incluant les nouvelles clés dynamiques pour l'API
         $paxSubStructure = [
             'title'                => [],
             'firstName'            => [],
@@ -66,30 +65,30 @@ public function handle(TravelOproService $travelOproService): void
             'passportNo'           => [],
             'passportIssueCountry' => [],
             'passportExpiryDate'   => [],
-            // Sécurité pour le parseur TravelOpro : évite les erreurs d'index absents
+
+            // Clés d'extras & Sièges colonnaires pour TravelOpro
             'ExtraServiceOutbound_1' => [],
             'ExtraServiceInbound_1'  => [],
             'SeatOutbound_1'         => [],
             'SeatInbound_1'          => [],
-            'ExtraServiceOutbound'   => [], // Clés spécifiques enfants parfois utilisées
-            'ExtraServiceInbound'    => []
+            'SeatOutboundCode_1'     => [],
+            'SeatInboundCode_1'      => [],
+            'SeatOutboundPrice_1'    => [],
+            'SeatInboundPrice_1'     => [],
         ];
 
-// On ne prépare les structures QUE pour les types de passagers réellement présents
         $paxGrouped = [];
 
-// --- 2. Remplissage dynamique des passagers (Multi-pax compatible) ---
+        // --- DEBUT DU TRAITEMENT DES PASSAGERS ---
         foreach ($booking->passengers as $passenger) {
             $dbType = strtoupper($passenger->passenger_type ?? 'ADT');
             $gdsKey = $typeMapping[$dbType] ?? 'adult';
 
-            // Initialisation à la volée du type de passager (adult, child, infant) s'il n'existe pas encore
             if (!isset($paxGrouped[$gdsKey])) {
-                // Copie de la structure colonnaire vierge
                 $paxGrouped[$gdsKey] = $paxSubStructure;
             }
 
-            // Sécurisation stricte des dates (ZÉRO null autorisé)
+            // Dates de base
             $birthDate = '';
             if (!empty($passenger->birth_date)) {
                 $birthDate = $passenger->birth_date instanceof \Carbon\Carbon
@@ -104,40 +103,92 @@ public function handle(TravelOproService $travelOproService): void
                     : date('Y-m-d', strtotime((string)$passenger->passport_expiry));
             }
 
-            // Nettoyage de la casse (ex: 'mr' -> 'Mr')
             $cleanTitle = ucfirst(strtolower(trim($passenger->title ?? 'Mr')));
             if (!in_array($cleanTitle, ['Mr', 'Mrs', 'Miss', 'Master'])) {
                 $cleanTitle = ($gdsKey === 'child' || $gdsKey === 'infant') ? 'Miss' : 'Mr';
             }
 
-            // Push des données dans les tableaux parallèles correspondants
             $paxGrouped[$gdsKey]['title'][]               = $cleanTitle;
             $paxGrouped[$gdsKey]['firstName'][]           = strtoupper(trim($passenger->first_name ?? ''));
             $paxGrouped[$gdsKey]['lastName'][]            = strtoupper(trim($passenger->last_name ?? ''));
             $paxGrouped[$gdsKey]['dob'][]                 = (string)$birthDate;
             $paxGrouped[$gdsKey]['nationality'][]         = strtoupper(trim($passenger->nationality ?? 'FR'));
 
-            // Gestion des passeports synchronisée
             $hasPassport = !empty($passenger->passport_number);
             $paxGrouped[$gdsKey]['passportNo'][]          = $hasPassport ? strtoupper(trim($passenger->passport_number)) : '';
             $paxGrouped[$gdsKey]['passportIssueCountry'][]= $hasPassport ? strtoupper(trim($passenger->passport_issue_country ?? 'FR')) : '';
             $paxGrouped[$gdsKey]['passportExpiryDate'][]  = ($hasPassport && !empty($passportExpiry)) ? (string)$passportExpiry : '';
 
-            // Note : Les tableaux de services optionnels restent vides [] pour ce passager, respectant le compte global
+            // 🟢 EXTRACTION EXTRA-SERVICES & REPAS DEPUIS LA RELATION
+            $outboundExtras = [];
+            $inboundExtras  = [];
+
+            $outboundSeats  = [];
+            $outboundCodes  = [];
+            $outboundPrices = [];
+
+            $inboundSeats   = [];
+            $inboundCodes   = [];
+            $inboundPrices  = [];
+
+            foreach ($passenger->services as $service) {
+                if (in_array($service->service_type, ['meal', 'baggage'])) {
+                    $extraPayload = [
+                        'serviceId' => $service->service_id,
+                        'quantity'  => (string)$service->quantity,
+                        'segment'   => (string)$service->segment_index,
+                    ];
+                    if ($service->direction === 'outbound') {
+                        $outboundExtras[] = $extraPayload;
+                    } else {
+                        $inboundExtras[] = $extraPayload;
+                    }
+                }
+
+                if ($service->service_type === 'seat') {
+                    if ($service->direction === 'outbound') {
+                        $outboundSeats[]  = $service->service_id;
+                        $outboundCodes[]  = $service->seat_code ?? '';
+                        $outboundPrices[] = (float)$service->amount;
+                    } else {
+                        $inboundSeats[]   = $service->service_id;
+                        $inboundCodes[]   = $service->seat_code ?? '';
+                        $inboundPrices[]  = (float)$service->amount;
+                    }
+                }
+            }
+
+            // Remplissage colonnaire (les tableaux d'extras/sièges sont encapsulés au premier niveau pour chaque passager)
+            $paxGrouped[$gdsKey]['ExtraServiceOutbound_1'][] = $outboundExtras;
+            $paxGrouped[$gdsKey]['ExtraServiceInbound_1'][]  = $inboundExtras;
+
+            $paxGrouped[$gdsKey]['SeatOutbound_1'][]         = $outboundSeats;
+            $paxGrouped[$gdsKey]['SeatInbound_1'][]          = $inboundSeats;
+
+            $paxGrouped[$gdsKey]['SeatOutboundCode_1'][]     = $outboundCodes;
+            $paxGrouped[$gdsKey]['SeatInboundCode_1'][]      = $inboundCodes;
+
+            $paxGrouped[$gdsKey]['SeatOutboundPrice_1'][]    = $outboundPrices;
+            $paxGrouped[$gdsKey]['SeatInboundPrice_1'][]     = $inboundPrices;
         }
 
-// --- Nettoyage final du payload ---
-// Supprime les clés d'options vides pour alléger le JSON si l'API ne les requiert pas strictement,
-// tout en conservant les blocs adult/child/infant intacts.
+        // Nettoyage final pour ne pas envoyer de clés vides superflues si un groupe entier n'a pas d'options
         foreach ($paxGrouped as $key => $paxType) {
             foreach ($paxType as $subKey => $value) {
-                if (empty($value) && in_array($subKey, ['ExtraServiceOutbound_1', 'ExtraServiceInbound_1', 'SeatOutbound_1', 'SeatInbound_1', 'ExtraServiceOutbound', 'ExtraServiceInbound'])) {
-                    unset($paxGrouped[$key][$subKey]);
+                // Si l'intégralité du groupe de passagers n'a sélectionné aucun extra, on nettoie pour alléger le JSON
+                if (in_array($subKey, ['ExtraServiceOutbound_1', 'ExtraServiceInbound_1', 'SeatOutbound_1', 'SeatInbound_1', 'SeatOutboundCode_1', 'SeatInboundCode_1', 'SeatOutboundPrice_1', 'SeatInboundPrice_1'])) {
+                    // On vérifie si tous les sous-tableaux sont strictement vides
+                    $allEmpty = collect($value)->every(function($item) {
+                        return empty($item);
+                    });
+                    if ($allEmpty) {
+                        unset($paxGrouped[$key][$subKey]);
+                    }
                 }
             }
         }
 
-// --- 3. Préparation et nettoyage des coordonnées ---
+        // Coordonnées de contact
         $cleanPhone = preg_replace('/[^0-9]/', '', $booking->contact_phone);
         $areaCode   = substr($cleanPhone, 0, 3) ?: '010';
         $purePhone  = substr($cleanPhone, 3) ?: '00000000';
@@ -145,7 +196,7 @@ public function handle(TravelOproService $travelOproService): void
         $firstPassenger = $booking->passengers->first();
         $isPassportMandatory = $firstPassenger && !empty($firstPassenger->passport_number);
 
-// --- 4. Reconstruction du Payload avec l'enveloppement strict [ { ... } ] ---
+        // Construction définitive du Payload
         $data = [
             'flightBookingInfo' => [
                 'flight_session_id'        => $booking->session_identifier ?? $booking->session_id,
@@ -163,21 +214,19 @@ public function handle(TravelOproService $travelOproService): void
                 'customerPhone' => $purePhone,
                 'bookingNote'   => 'Réservation via Queue Job - Type: ' . ($booking->booking_type ?? 'now'),
                 'paxDetails'    => [
-                    $paxGrouped // Regroupe 'adult', 'child', et 'infant' dans le même objet imbriqué
+                    $paxGrouped
                 ]
             ]
         ];
 
-        Log::info("[TravelOpro Job] Payload colonnaire épuré généré. Envoi au GDS.", ['types_presents' => array_keys($paxGrouped)]);
-
+        Log::info("[TravelOpro Job] Payload complet avec services généré. Envoi au GDS.", ['types_presents' => array_keys($paxGrouped)]);
         logger($data);
-// --- 5. Exécution et validation finale ---
+
+        // Envoi au GDS via ton service
         $gdsResponse = $travelOproService->createBooking($data);
 
-        // On vérifie le tableau standardisé renvoyé par votre service
         if (isset($gdsResponse['success']) && $gdsResponse['success'] === true && isset($gdsResponse['booking_reference'])) {
-
-            $pnr = $gdsResponse['booking_reference']; // Contient le UniqueID extrait par le service
+            $pnr = $gdsResponse['booking_reference'];
             $finalStatus = ($booking->booking_type === 'hold') ? 'hold' : 'ticketed';
 
             $booking->update([
@@ -188,14 +237,13 @@ public function handle(TravelOproService $travelOproService): void
 
             Log::info("[TravelOpro Job] Succès ! Vol confirmé avec le PNR: {$pnr}");
         } else {
-            // Le service a déjà extrait le bon message d'erreur s'il y en a un
             $errorMessage = $gdsResponse['message'] ?? 'Erreur ou refus renvoyé par le GDS.';
             throw new \Exception($errorMessage);
         }
 
     } catch (\Throwable $exception) {
         Log::error("[TravelOpro Job] Échec tentative {$this->attempts()} : " . $exception->getMessage());
-        $booking->update(['booking_status' => 'gds_failed']); // Optionnel : pour ne pas bloquer le statut en processing
+        $booking->update(['booking_status' => 'gds_failed']);
         throw $exception;
     }
 }

@@ -66,8 +66,6 @@ Route::get('/hotels/more-results', [HotelController::class, 'getMoreResults']);
 Route::prefix('flights')->group(function () {
     Route::post('/booking/session/init', [FlightController::class, 'CreateInitSession']);
     Route::post('/booking/passengers', [FlightController::class, 'addPassengers']);
-    // ÉTAPE 1 : Rechercher des offres de vols (Next.js -> Laravel -> Travelport)
-   // Route::post('/search', [FlightController::class, 'search'])->name('api.flights.search');
     Route::post('/search', [FlightTravelOproController::class, 'search'])->name('api.flights.search');
     Route::post('/extra-services', [FlightTravelOproController::class, 'getExtraServices']);
     Route::post('/revalidate', [FlightTravelOproController::class, 'revalidate']);

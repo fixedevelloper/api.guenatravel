@@ -85,7 +85,7 @@ class TravelOproService
                 'requiredCurrency'      => !empty($validatedData['currency']) ? strtoupper($validatedData['currency']) : 'XAF',
                 'journeyType'           => $journeyType,
                 'OriginDestinationInfo' => $originDestinationInfo,
-                'class'                 => $validatedData['class'] ?? 'Economy',
+                'class'                 => $validatedData['travel_class'] ?? 'Economy',
                 'adults'                => (int)$validatedData['passengers']['adults'],
                 'childs'                => (int)$validatedData['passengers']['children'],
                 'infants'               => (int)$validatedData['passengers']['infants'],
@@ -546,29 +546,51 @@ class TravelOproService
      */
     public function fetchExtraServices(string $sessionId, string $fareSourceCode): array
     {
-        try {
-            $response = Http::withHeaders([
-                'Accept'        => 'application/json',
-            ])->post("{$this->baseUrl}/api/aeroVE5/extra_services", [
-                'session_id'       => $sessionId,
-                'fare_source_code' => $fareSourceCode,
-            ]);
+        // 1. Création d'une clé de cache unique basée sur les paramètres de la requête
+        $cacheKey = 'travelopro_extra_services_' . md5($sessionId . '_' . $fareSourceCode);
 
-            logger($response);
-            if ($response->failed()) {
-                Log::error('Erreur API aeroVE5 Extra Services', [
-                    'status' => $response->status(),
-                    'body'   => $response->body()
-                ]);
-                throw new Exception("L'API partenaire a retourné une erreur.");
-            }
+        // 2. Encapsulation dans le système de cache (ex: 15 minutes)
+        return Cache::remember($cacheKey, now()->addMinutes(15), function () use ($sessionId, $fareSourceCode, $cacheKey) {
+                try {
+                    $response = Http::withHeaders([
+                        'Accept' => 'application/json',
+                    ])->post("{$this->baseUrl}/api/aeroVE5/extra_services", [
+                        'session_id'       => $sessionId,
+                        'fare_source_code' => $fareSourceCode,
+                    ]);
 
-            return $response->json();
+                    if ($response->failed()) {
+                        Log::error('Erreur API aeroVE5 Extra Services', [
+                            'status' => $response->status(),
+                            'body'   => $response->body(),
+                        ]);
 
-        } catch (Exception $e) {
-            Log::critical('Échec de communication avec aeroVE5', ['message' => $e->getMessage()]);
-            throw new Exception("Impossible de récupérer les options du vol pour le moment.");
-        }
+                        // En cas d'erreur de statut de l'API, on retourne null pour NE PAS mettre l'erreur en cache
+                        return null;
+                    }
+
+                    $parsedResult = $this->parseExtraServicesResponse($response->json());
+
+                    // Si l'API renvoie un succès applicatif faux (ex: session expirée), on évite aussi le cache
+                    if (isset($parsedResult['success']) && !$parsedResult['success']) {
+                        return null;
+                    }
+
+                    return $parsedResult;
+
+                } catch (\Exception $e) {
+                    Log::critical('Échec communication aeroVE5 Extra Services', [
+                        'message' => $e->getMessage(),
+                    ]);
+
+                    // En cas d'exception réseau, on retourne null pour retenter la prochaine fois
+                    return null;
+                }
+            }) ?? [
+                // 3. Fallback si le cache a reçu "null" (ce qui signifie qu'un problème est survenu à l'intérieur du closure)
+                'success'       => false,
+                'error_message' => "Impossible de récupérer les options du vol auprès du fournisseur.",
+            ];
     }
 
     /**
@@ -980,6 +1002,151 @@ class TravelOproService
                 'currency'      => $s['ServiceCost']['CurrencyCode'],
             ];
         }, $services);
+    }
+    public function parseExtraServicesResponse(array $response): array
+    {
+        $result = $response['ExtraServicesResponse']['ExtraServicesResult'] ?? null;
+
+        if (!$result || !($result['success'] ?? false)) {
+            return [
+                'success'  => false,
+                'baggage'  => [],
+                'meals'    => [],
+                'seats'    => [],
+            ];
+        }
+
+        $data = $result['ExtraServicesData'] ?? [];
+
+        return [
+            'success' => true,
+            'baggage' => $this->parseDynamicBaggage($data['DynamicBaggage'] ?? []),
+            'meals'   => $this->parseDynamicMeal($data['DynamicMeal']    ?? []),
+            'seats'   => $this->parseDynamicSeat($data['DynamicSeat']    ?? []),
+        ];
+    }
+
+// ── Bagages ────────────────────────────────────────────────────────────────
+    private function parseDynamicBaggage(array $baggageGroups): array
+    {
+        return array_map(function ($group) {
+            return [
+                'behavior'      => $group['Behavior'],       // PER_PAX_OUTBOUND | PER_PAX_INBOUND
+                'is_multi_select' => $group['IsMultiSelect'],
+                'services'      => $this->parseServiceItems($group['Services'] ?? []),
+            ];
+        }, $baggageGroups);
+    }
+
+// ── Repas ──────────────────────────────────────────────────────────────────
+    private function parseDynamicMeal(array $mealGroups): array
+    {
+        return array_map(function ($group) {
+            return [
+                'behavior'        => $group['Behavior'], // PER_PAX_PER_SEGMENT_OUTBOUND | _INBOUND
+                'is_multi_select' => $group['IsMultiSelect'],
+                // Services est un tableau de tableaux (un par segment)
+                'segments'        => array_map(
+                    fn($segment) => $this->parseServiceItems($segment),
+                    $group['Services'] ?? []
+                ),
+            ];
+        }, $mealGroups);
+    }
+
+// ── Sièges ─────────────────────────────────────────────────────────────────
+// DynamicSeat = tableau[direction][segment][DeckSeats[]]
+    private function parseDynamicSeat(array $seatDirections): array
+    {
+        $parsed = [];
+
+        foreach ($seatDirections as $directionIdx => $segments) {
+            $direction = $directionIdx === 0 ? 'outbound' : 'inbound';
+
+            foreach ($segments as $segmentIdx => $segment) {
+                $parsedDecks = [];
+
+                foreach ($segment['DeckSeats'] ?? [] as $deck) {
+                    $deckNo = $deck['DeckNo'];
+
+                    // Deck 0 = "NoSeat" placeholder, on le skip
+                    if ($deckNo === 0) continue;
+
+                    $rows = [];
+                    foreach ($deck['RowSeats'] ?? [] as $rowData) {
+                        $seats = [];
+                        foreach ($rowData['Seats'] ?? [] as $seat) {
+                            // Skip les sièges "NoSeat"
+                            if ($seat['SeatCode'] === 'NoSeat') continue;
+
+                            $seats[] = [
+                                'service_id'    => $seat['ServiceId'],
+                                'airline_code'  => $seat['AirlineCode'],
+                                'flight_number' => $seat['FlightNumber'],
+                                'equipment'     => $seat['EquipmentCode'],
+                                'from'          => $seat['DepartureAirportLocationCode'],
+                                'to'            => $seat['ArrivalAirportLocationCode'],
+                                'deck_no'       => $seat['DeckNo'],
+                                'row_no'        => $seat['RowNo'],
+                                'seat_no'       => $seat['SeatNo'],
+                                'seat_code'     => $seat['SeatCode'],
+                                'availability'  => [
+                                    'code' => $seat['AvailablityType']['Code'],
+                                    'text' => $seat['AvailablityType']['Text'],
+                                ],
+                                'seat_type'     => [
+                                    'code' => $seat['SeatType']['Code'],
+                                    'text' => $seat['SeatType']['Text'],
+                                ],
+                                'compartment'   => $seat['Compartment']['Text'],
+                                'is_available'  => $seat['AvailablityType']['Code'] === 1, // 1 = Open
+                                'is_reserved'   => $seat['AvailablityType']['Code'] === 3, // 3 = Reserved
+                                'amount'        => (float) $seat['Fare']['Amount'],
+                                'currency'      => $seat['Fare']['CurrencyCode'],
+                            ];
+                        }
+
+                        if (!empty($seats)) {
+                            $rows[] = [
+                                'row_no' => $rowData['RowNo'],
+                                'seats'  => $seats,
+                            ];
+                        }
+                    }
+
+                    $parsedDecks[] = [
+                        'deck_no' => $deckNo,
+                        'rows'    => $rows,
+                    ];
+                }
+
+                $parsed[] = [
+                    'direction'   => $direction,
+                    'segment_idx' => $segmentIdx,
+                    'decks'       => $parsedDecks,
+                ];
+            }
+        }
+
+        return $parsed;
+    }
+
+// ── Helper commun — parse un tableau de services ──────────────────────────
+    private function parseServiceItems(array $serviceGroup): array
+    {
+        return array_map(function ($service) {
+            return [
+                'service_id'      => $service['ServiceId'],
+                'description'     => $service['Description'],
+                'fare_description'=> $service['FareDescription'] ?? null,
+                'checkin_type'    => $service['CheckInType'],
+                'is_mandatory'    => $service['IsMandatory'],
+                'min_quantity'    => $service['MinimumQuantity'] ?? 0,
+                'max_quantity'    => $service['MaximumQuantity'] ?? 1,
+                'amount'          => (float) $service['ServiceCost']['Amount'],
+                'currency'        => $service['ServiceCost']['CurrencyCode'],
+            ];
+        }, $serviceGroup);
     }
     /**
      * Formate et mappe les résultats bruts de TravelOpro vers la structure standard attendue par le Front.

@@ -56,7 +56,7 @@ class FlightTravelOproController extends Controller
             'departure_date'            => 'required|date|after_or_equal:today',
             'currency'                  => 'nullable|string|size:3',
             'direct_flight'             => 'nullable|integer|in:0,1',
-            'class'                     => 'nullable|string|in:Economy,Business,First,PremiumEconomy',
+            'travel_class'               => 'nullable|string|in:Economy,Business,First,PremiumEconomy',
         ]);
 
         try {
@@ -117,39 +117,47 @@ class FlightTravelOproController extends Controller
         return response()->json($result);
     }
 
-    /**
-     * Récupère les services supplémentaires (bagages, repas, options) pour un vol.
-     *
-     * @param Request $request
-     * @return JsonResponse
-     */
     public function getExtraServices(Request $request): JsonResponse
     {
         try {
-            // Extraction des données validées
             $validated = $request->validate([
                 'session_id'       => ['required', 'string'],
                 'fare_source_code' => ['required', 'string'],
             ]);
 
-            // Appel du service pour contacter l'API externe aeroVE5
-            $rawExtraServices = $this->travelOproService->fetchExtraServices(
+            $result = $this->travelOproService->fetchExtraServices(
                 $validated['session_id'],
                 $validated['fare_source_code']
             );
 
-            // Mapping vers la structure normalisée demandée
-            $mappedData = $this->mapExtraServicesResponse($rawExtraServices);
+            if (!$result['success']) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $result['error_message'] ?? 'Impossible de récupérer les services.',
+                ], 400);
+            }
 
             return response()->json([
                 'success' => true,
-                'data'    => $mappedData
+                'data'    => [
+                    'baggage' => $result['baggage'],
+                    'meals'   => $result['meals'],
+                    'seats'   => $result['seats'],
+                ],
             ]);
 
-        } catch (Exception $e) {
+        } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
+                'message' => 'Paramètres invalides.',
+                'errors'  => $e->errors(),
+            ], 422);
+
+        } catch (\Exception $e) {
+            Log::error('getExtraServices error', ['message' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur serveur.',
             ], 500);
         }
     }
@@ -188,145 +196,6 @@ class FlightTravelOproController extends Controller
     }
 
     /**
-     * Map la réponse brute de l'API externe vers le format cible attendu par le contrat.
-     * @param array $rawResponse
-     * @return array
-     */
-    private function mapExtraServicesResponse(array $rawResponse): array
-    {
-        // On descend jusqu'au niveau utile s'il est enveloppé dans la réponse type SOAP/API
-        $source = $rawResponse['ExtraServicesResponse']['ExtraServicesResult']['ExtraServicesData']
-            ?? $rawResponse['data']
-            ?? $rawResponse;
-
-        return [
-            'ExtraServicesData' => [
-
-                // 1. Mapping du Bagage Dynamique
-                'DynamicBaggage' => array_map(function ($baggageSector) {
-                    // Gestion du tableau de tableaux si l'API renvoie des services doublement imbriqués
-                    $rawServices = $baggageSector['services'] ?? $baggageSector['Services'] ?? [];
-                    if (isset($rawServices[0]) && is_array($rawServices[0])) {
-                        $rawServices = $rawServices[0];
-                    }
-
-                    return [
-                        'Behavior'      => $baggageSector['behavior'] ?? $baggageSector['Behavior'] ?? 'PER_PAX_OUTBOUND',
-                        'IsMultiSelect' => (bool)($baggageSector['is_multi_select'] ?? $baggageSector['IsMultiSelect'] ?? true),
-                        'Services'      => array_map(function ($service) {
-                            return [
-                                'ServiceId'       => $service['service_id'] ?? $service['ServiceId'] ?? '',
-                                'CheckInType'     => $service['check_in_type'] ?? $service['CheckInType'] ?? 'AIRPORT',
-                                'Description'     => $service['description'] ?? $service['Description'] ?? '',
-                                'FareDescription' => $service['fare_description'] ?? $service['FareDescription'] ?? '',
-                                'IsMandatory'     => (bool)($service['is_mandatory'] ?? $service['IsMandatory'] ?? false),
-                                'MinimumQuantity' => (int)($service['minimum_quantity'] ?? $service['MinimumQuantity'] ?? 0),
-                                'MaximumQuantity' => (int)($service['maximum_quantity'] ?? $service['MaximumQuantity'] ?? 1),
-                                'ServiceCost'     => [
-                                    'Amount'        => (string)($service['service_cost']['amount'] ?? $service['ServiceCost']['Amount'] ?? '0.00'),
-                                    'CurrencyCode'  => $service['service_cost']['currency_code'] ?? $service['ServiceCost']['CurrencyCode'] ?? 'USD',
-                                    'DecimalPlaces' => (string)($service['service_cost']['decimal_places'] ?? $service['ServiceCost']['DecimalPlaces'] ?? '2'),
-                                ]
-                            ];
-                        }, $rawServices)
-                    ];
-                }, $source['dynamic_baggage'] ?? $source['DynamicBaggage'] ?? []),
-
-                // 2. Mapping des Repas Dynamiques
-                'DynamicMeal' => array_map(function ($mealSector) {
-                    // Correction de la double imbrication du tableau 'Services' [[ ... ]]
-                    $rawServices = $mealSector['services'] ?? $mealSector['Services'] ?? [];
-                    if (isset($rawServices[0]) && is_array($rawServices[0])) {
-                        $rawServices = $rawServices[0];
-                    }
-
-                    return [
-                        'Behavior'      => $mealSector['behavior'] ?? $mealSector['Behavior'] ?? 'PER_PAX_OUTBOUND',
-                        'IsMultiSelect' => (bool)($mealSector['is_multi_select'] ?? $mealSector['IsMultiSelect'] ?? true),
-                        'Services'      => array_map(function ($service) {
-                            return [
-                                'ServiceId'       => $service['service_id'] ?? $service['ServiceId'] ?? '',
-                                'CheckInType'     => $service['check_in_type'] ?? $service['CheckInType'] ?? 'AIRPORT',
-                                'Description'     => $service['description'] ?? $service['Description'] ?? '',
-                                'FareDescription' => $service['fare_description'] ?? $service['FareDescription'] ?? '',
-                                'IsMandatory'     => (bool)($service['is_mandatory'] ?? $service['IsMandatory'] ?? false),
-                                'MinimumQuantity' => (int)($service['minimum_quantity'] ?? $service['MinimumQuantity'] ?? 0),
-                                'MaximumQuantity' => (int)($service['maximum_quantity'] ?? $service['MaximumQuantity'] ?? 1),
-                                'ServiceCost'     => [
-                                    'Amount'        => (string)($service['service_cost']['amount'] ?? $service['ServiceCost']['Amount'] ?? '0.00'),
-                                    'CurrencyCode'  => $service['service_cost']['currency_code'] ?? $service['ServiceCost']['CurrencyCode'] ?? 'USD',
-                                    'DecimalPlaces' => (string)($service['service_cost']['decimal_places'] ?? $service['ServiceCost']['DecimalPlaces'] ?? '2'),
-                                ]
-                            ];
-                        }, $rawServices)
-                    ];
-                }, $source['dynamic_meal'] ?? $source['DynamicMeal'] ?? []),
-
-                // 3. Mapping de la Grille des Sièges
-                'DynamicSeat' => array_map(function ($seatSector) {
-                    // Correction de la double imbrication racine de DynamicSeat [[ ... ]]
-                    if (isset($seatSector[0]) && is_array($seatSector[0])) {
-                        $seatSector = $seatSector[0];
-                    }
-
-                    return [
-                        'DeckSeats' => array_map(function ($deck) {
-                            return [
-                                'DeckNo'   => (int)($deck['deck_no'] ?? $deck['DeckNo'] ?? 1),
-                                'RowSeats' => array_map(function ($row) {
-                                    return [
-                                        'RowNo' => (string)($row['row_no'] ?? $row['RowNo'] ?? ''),
-                                        'Seats' => array_map(function ($seat) {
-                                            return [
-                                                'ServiceId'                         => $seat['service_id'] ?? $seat['ServiceId'] ?? '',
-                                                'AirlineCode'                       => $seat['airline_code'] ?? $seat['AirlineCode'] ?? '',
-                                                'FlightNumber'                      => $seat['flight_number'] ?? $seat['FlightNumber'] ?? '',
-                                                'EquipmentCode'                     => $seat['equipment_code'] ?? $seat['EquipmentCode'] ?? '',
-                                                'DepartureAirportLocationCode'      => $seat['departure_airport_location_code'] ?? $seat['DepartureAirportLocationCode'] ?? '',
-                                                'ArrivalAirportLocationCode'        => $seat['arrival_airport_location_code'] ?? $seat['ArrivalAirportLocationCode'] ?? '',
-                                                'DeckNo'                            => (string)($seat['deck_no'] ?? $seat['DeckNo'] ?? '1'),
-                                                'RowNo'                             => (string)($seat['row_no'] ?? $seat['RowNo'] ?? ''),
-                                                'SeatNo'                            => (string)($seat['seat_no'] ?? $seat['SeatNo'] ?? ''),
-                                                'SeatCode'                          => $seat['seat_code'] ?? $seat['SeatCode'] ?? '',
-
-                                                // Correction de la clé "AvailablityType" (sans 'i' dans ton JSON)
-                                                'AvailabilityType' => [
-                                                    'Code' => (string)($seat['availability_type']['code'] ?? $seat['AvailabilityType']['Code'] ?? $seat['AvailablityType']['Code'] ?? '5'),
-                                                    'Text' => $seat['availability_type']['text'] ?? $seat['AvailabilityType']['Text'] ?? $seat['AvailablityType']['Text'] ?? 'Not available',
-                                                ],
-                                                'Description' => [
-                                                    'Code' => (string)($seat['description']['code'] ?? $seat['Description']['Code'] ?? '3'),
-                                                    'Text' => $seat['description']['text'] ?? $seat['Description']['Text'] ?? '',
-                                                ],
-                                                'Compartment' => [
-                                                    'Code' => (string)($seat['compartment']['code'] ?? $seat['Compartment']['Code'] ?? '1'),
-                                                    'Text' => $seat['compartment']['text'] ?? $seat['Compartment']['Text'] ?? '',
-                                                ],
-                                                'SeatType' => [
-                                                    'Code' => (string)($seat['seat_type']['code'] ?? $seat['SeatType']['Code'] ?? '1'),
-                                                    'Text' => $seat['seat_type']['text'] ?? $seat['SeatType']['Text'] ?? '',
-                                                ],
-                                                'SeatWayType' => [
-                                                    'Code' => (string)($seat['seat_way_type']['code'] ?? $seat['SeatWayType']['Code'] ?? '1'),
-                                                    'Text' => $seat['seat_way_type']['text'] ?? $seat['SeatWayType']['Text'] ?? 'Segment',
-                                                ],
-                                                'Fare' => [
-                                                    'Amount'        => (string)($seat['fare']['amount'] ?? $seat['Fare']['Amount'] ?? '0.00'),
-                                                    'CurrencyCode'  => $seat['fare']['currency_code'] ?? $seat['Fare']['CurrencyCode'] ?? 'USD',
-                                                    'DecimalPlaces' => (string)($seat['fare']['decimal_places'] ?? $seat['Fare']['DecimalPlaces'] ?? '2'),
-                                                ]
-                                            ];
-                                        }, $row['seats'] ?? $row['Seats'] ?? [])
-                                    ];
-                                }, $deck['row_seats'] ?? $deck['RowSeats'] ?? [])
-                            ];
-                        }, $seatSector['deck_seats'] ?? $seatSector['DeckSeats'] ?? [])
-                    ];
-                }, $source['dynamic_seat'] ?? $source['DynamicSeat'] ?? [])
-            ]
-        ];
-    }
-    /**
      * Récupère la liste complète des aéroports (Utile pour alimenter un cache ou un autocomplete)
      */
     public function airports(): JsonResponse
@@ -351,7 +220,7 @@ class FlightTravelOproController extends Controller
 
     public function verifyAndPay(Request $request)
     {
-        // 1. VALIDATION STRICTE ET INTERNATIONALE DU PAYLOAD
+        // 1. EXTRACTION ET AJUSTEMENT DYNAMIQUE DES RÈGLES POUR LES EXTRAS
         $rules = [
             'session_identifier'                                => 'required|string',
             'booking_type'                                      => 'required|string|in:now,hold',
@@ -360,12 +229,11 @@ class FlightTravelOproController extends Controller
             'selected_flight'                                   => 'required|array',
             'selected_flight.id'                                => 'required|string',
 
-            // Bloc Selected Flight - Info GDS (Travelport / TravelOpro)
+            // Bloc Selected Flight - Info GDS (Travelport)
             'selected_flight.travelport'                        => 'required|array',
             'selected_flight.travelport.transaction_id'         => 'required|string',
             'selected_flight.travelport.offering_id'            => 'required|string',
             'selected_flight.travelport.gds_authority_value'    => 'required|string',
-            //'selected_flight.travelport.catalog_offerings_identifier' => 'required|string',
 
             // Tableaux techniques du GDS
             'selected_flight.travelport.available_brands'       => 'sometimes|array',
@@ -387,7 +255,6 @@ class FlightTravelOproController extends Controller
             // Bloc Selected Flight - Structure Itinéraire & Segments
             'selected_flight.itinerary'                         => 'required|array|min:1',
             'selected_flight.itinerary.*.direction'             => 'required|string|in:outbound,inbound',
-         //   'selected_flight.itinerary.*.offering_id'           => 'required|string',
             'selected_flight.itinerary.*.brand_value'           => 'nullable|string',
             'selected_flight.itinerary.*.product_ref'           => 'sometimes|string',
             'selected_flight.itinerary.*.travelport'            => 'sometimes|array',
@@ -407,14 +274,16 @@ class FlightTravelOproController extends Controller
             'selected_flight.itinerary.*.segments.*.arrival.airport'   => 'required|string|max:5',
             'selected_flight.itinerary.*.segments.*.arrival.time'      => 'required|date_format:Y-m-d\TH:i:s',
 
-            // Bloc Bagages
-            'selected_flight.baggage_allowance'                 => 'sometimes|array',
-            'selected_flight.baggage_allowance.checked'         => 'nullable|string',
-            'selected_flight.baggage_allowance.cabin'           => 'nullable|string',
+            // Bloc Options Globales du Front
+            'insuranceSelected'                                 => 'required|boolean',
+            'extraBaggage'                                      => 'required|integer',
+            'outboundMeal'                                      => 'nullable|string',
+            'inboundMeal'                                       => 'nullable|string',
 
             // Options et Paiement
             'payment_method'                                    => 'required|string|in:momo,card,wave,om',
             'phone_number'                                      => 'nullable|string|min:9|max:15',
+            'finalpricetopay'                                   => 'required|numeric',
 
             // Contacts & Voyageurs
             'contact_info'                                      => 'required|array',
@@ -431,6 +300,22 @@ class FlightTravelOproController extends Controller
             'passengers.*.passport_expiry'                      => 'sometimes|nullable|date|after:today',
         ];
 
+        // Génération dynamique des règles de validation pour les clés d'extras par passager
+        $inputData = $request->all();
+        if (isset($inputData['passengers']) && is_array($inputData['passengers'])) {
+            foreach ($inputData['passengers'] as $index => $p) {
+                $pKey = $index + 1;
+                $rules["ExtraServiceOutbound_$pKey"] = 'sometimes|array';
+                $rules["ExtraServiceInbound_$pKey"]  = 'sometimes|array';
+                $rules["SeatOutbound_$pKey"]         = 'sometimes|array';
+                $rules["SeatInbound_$pKey"]          = 'sometimes|array';
+                $rules["SeatOutboundCode_$pKey"]     = 'sometimes|array';
+                $rules["SeatInboundCode_$pKey"]      = 'sometimes|array';
+                $rules["SeatOutboundPrice_$pKey"]    = 'sometimes|array';
+                $rules["SeatInboundPrice_$pKey"]     = 'sometimes|array';
+            }
+        }
+
         if (in_array($request->input('payment_method'), ['momo', 'om', 'wave'])) {
             $rules['phone_number'] = 'required|string';
         }
@@ -444,18 +329,19 @@ class FlightTravelOproController extends Controller
             $paymentMethod     = $validatedData['payment_method'];
 
             $currencyCode      = $selectedFlight['price_details']['currency'];
-            $totalFlightPrice  = (float) $selectedFlight['price_details']['final_price_to_pay'];
-            $phoneNumber       = $validatedData['phone_number'] ?? null;
 
-            // Configuration des frais de blocage (Hold)
-            $holdFee = 5000;
-            // Si c'est un 'hold', on ne débite que 5000 XAF maintenant. Si c'est 'now', la totalité.
-            $amountToDebit = ($bookingType === 'hold') ? (float) $holdFee : $totalFlightPrice;
+            // Utiliser le montant final calculé par le front incluant les extras options
+            $amountToDebit     = (float) $validatedData['finalpricetopay'];
+            $holdFee           = 5000;
+
+            if ($bookingType === 'hold') {
+                $amountToDebit = (float) $holdFee;
+            }
 
             // ----------------------------------------------------------------
             // 2. ENREGISTREMENT ET GESTION DU COMPTE (Transaction SQL)
             // ----------------------------------------------------------------
-            $booking = DB::transaction(function () use ($validatedData, $selectedFlight, $totalFlightPrice, $sessionIdentifier, $paymentMethod, $bookingType, $currencyCode) {
+            $booking = DB::transaction(function () use ($validatedData, $selectedFlight, $amountToDebit, $sessionIdentifier, $paymentMethod, $bookingType, $currencyCode) {
 
                 $contactEmail = $validatedData['contact_info']['email'];
                 $contactPhone = $validatedData['contact_info']['phone'];
@@ -485,17 +371,16 @@ class FlightTravelOproController extends Controller
                     $userId = $user->id;
                 }
 
-                // 🟢 INSERTION DE LA RÉSERVATION PRINCIPALE (flight_bookings)
-                // Note : 'hold_fee_paid' a été retiré car absent de votre fichier de migration.
+                // 🟢 INSERTION DE LA RÉSERVATION PRINCIPALE
                 $flightBooking = FlightBooking::create([
                     'user_id'            => $userId,
                     'session_identifier' => $sessionIdentifier,
-                    'pnr'                => null, // Le PNR sera généré par le GDS *après* confirmation du paiement
+                    'pnr'                => null,
                     'booking_type'       => $bookingType,
                     'booking_status'     => 'pending_payment',
-                    'total_amount'       => $totalFlightPrice,
-                    'amount_paid'        => 0.00, // Mis à jour lors du webhook de paiement réussi
-                    'raw_flight_data'    => $selectedFlight, // Stocké en format JSON
+                    'total_amount'       => (float) $validatedData['finalpricetopay'],
+                    'amount_paid'        => 0.00,
+                    'raw_flight_data'    => $selectedFlight,
                     'currency'           => $currencyCode,
                     'payment_method'     => $paymentMethod,
                     'payment_status'     => 'unpaid',
@@ -516,7 +401,7 @@ class FlightTravelOproController extends Controller
                             'sort_order'          => $sortOrder++,
                             'offering_id'         => $offeringId,
                             'brand_value'         => $brandValue,
-                            'gds_authority_value' => $selectedFlight['travelport']['gds_authority_value'] ?? 'TravelOpro',
+                            'gds_authority_value' => $selectedFlight['travelport']['gds_authority_value'] ?? 'Travelport',
                             'origin'              => strtoupper($segment['departure']['airport']),
                             'destination'         => strtoupper($segment['arrival']['airport']),
                             'departure_time'      => Carbon::parse($segment['departure']['time']),
@@ -527,9 +412,10 @@ class FlightTravelOproController extends Controller
                     }
                 }
 
-                // 🟢 INSERTION DES PASSAGERS (flight_passengers)
-                foreach ($validatedData['passengers'] as $passenger) {
-                    // Normalisation du type pour correspondre aux enums (ADT, CHD, INF) de votre migration
+                // 🟢 INSERTION DES PASSAGERS ET DE LEURS EXTRAS CORRESPONDANTS
+                foreach ($validatedData['passengers'] as $index => $passenger) {
+                    $pKey = $index + 1;
+
                     $inputGenericType = strtolower($passenger['passenger_type'] ?? 'adt');
                     $passengerType = 'ADT';
                     if (str_contains($inputGenericType, 'chd') || str_contains($inputGenericType, 'child')) {
@@ -538,10 +424,9 @@ class FlightTravelOproController extends Controller
                         $passengerType = 'INF';
                     }
 
-                    // Normalisation de la civilité pour votre champ string(10)
-                    $civility = strtoupper(str_replace('.', '', $passenger['civility'])); // M. -> M, Mme -> MME
+                    $civility = strtoupper(str_replace('.', '', $passenger['civility']));
 
-                    $flightBooking->passengers()->create([
+                    $dbPassenger = $flightBooking->passengers()->create([
                         'passenger_type'  => $passengerType,
                         'title'           => $civility,
                         'first_name'      => $passenger['first_name'],
@@ -550,6 +435,72 @@ class FlightTravelOproController extends Controller
                         'passport_number' => $passenger['passport_number'] ?? null,
                         'passport_expiry' => $passenger['passport_expiry'] ?? null,
                     ]);
+
+                    // ── PARSAGE DES REPAS / BAGAGES ALLER ──
+                    if (!empty($validatedData["ExtraServiceOutbound_$pKey"][0])) {
+                        foreach ($validatedData["ExtraServiceOutbound_$pKey"][0] as $extra) {
+                            $dbPassenger->services()->create([
+                                'service_type'  => str_starts_with($extra['serviceId'], 'XB') ? 'baggage' : 'meal',
+                                'service_id'    => $extra['serviceId'],
+                                'description'   => str_starts_with($extra['serviceId'], 'XB') ? 'Bagage supplémentaire' : 'Repas de cabine Aller',
+                                'quantity'      => (int) ($extra['quantity'] ?? 1),
+                                'segment_index' => (int) ($extra['segment'] ?? 0),
+                                'direction'     => 'outbound',
+                                'amount'        => 45000.00, // Ton prix fixe par bagage ou ajusté selon le GDS
+                                'currency'      => $currencyCode,
+                            ]);
+                        }
+                    }
+
+                    // ── PARSAGE DES REPAS RETOUR ──
+                    if (!empty($validatedData["ExtraServiceInbound_$pKey"][0])) {
+                        foreach ($validatedData["ExtraServiceInbound_$pKey"][0] as $extra) {
+                            $dbPassenger->services()->create([
+                                'service_type'  => 'meal',
+                                'service_id'    => $extra['serviceId'],
+                                'description'   => 'Repas de cabine Retour',
+                                'quantity'      => (int) ($extra['quantity'] ?? 1),
+                                'segment_index' => (int) ($extra['segment'] ?? 0),
+                                'direction'     => 'inbound',
+                                'amount'        => 0.00,
+                                'currency'      => $currencyCode,
+                            ]);
+                        }
+                    }
+
+                    // ── PARSAGE DES SIÈGES ALLER ──
+                    if (!empty($validatedData["SeatOutbound_$pKey"][0])) {
+                        foreach ($validatedData["SeatOutbound_$pKey"][0] as $segmentIdx => $serviceId) {
+                            $dbPassenger->services()->create([
+                                'service_type'  => 'seat',
+                                'service_id'    => $serviceId,
+                                'seat_code'     => $validatedData["SeatOutboundCode_$pKey"][$segmentIdx] ?? null,
+                                'description'   => 'Sélection Siège Aller',
+                                'quantity'      => 1,
+                                'segment_index' => $segmentIdx,
+                                'direction'     => 'outbound',
+                                'amount'        => (float) ($validatedData["SeatOutboundPrice_$pKey"][$segmentIdx] ?? 0.00),
+                                'currency'      => $currencyCode,
+                            ]);
+                        }
+                    }
+
+                    // ── PARSAGE DES SIÈGES RETOUR ──
+                    if (!empty($validatedData["SeatInbound_$pKey"][0])) {
+                        foreach ($validatedData["SeatInbound_$pKey"][0] as $segmentIdx => $serviceId) {
+                            $dbPassenger->services()->create([
+                                'service_type'  => 'seat',
+                                'service_id'    => $serviceId,
+                                'seat_code'     => $validatedData["SeatInboundCode_$pKey"][$segmentIdx] ?? null,
+                                'description'   => 'Sélection Siège Retour',
+                                'quantity'      => 1,
+                                'segment_index' => $segmentIdx,
+                                'direction'     => 'inbound',
+                                'amount'        => (float) ($validatedData["SeatInboundPrice_$pKey"][$segmentIdx] ?? 0.00),
+                                'currency'      => $currencyCode,
+                            ]);
+                        }
+                    }
                 }
 
                 return $flightBooking;
@@ -558,11 +509,12 @@ class FlightTravelOproController extends Controller
             // 3. CACHE TEMPORAIRE DES DONNÉES DU VOL (10 min)
             Cache::put('flight_payload_' . $booking->id, $selectedFlight, 600);
 
-            // 4. INITIATION DU ROUTAGE DU PAIEMENT (Momo, OM, Wave, Card)
+            // 4. INITIATION DU ROUTAGE DU PAIEMENT LOCAL
+            $phoneNumber = $validatedData['phone_number'] ?? null;
             $paymentResult = $this->paymentService->initiateLocalPayment(
                 $paymentMethod,
                 $phoneNumber,
-                $amountToDebit, // Débite soit les 5000 XAF (Hold), soit le prix total (Now)
+                $amountToDebit, // Débite 5000 XAF si hold ou prix total si now
                 $booking->id,
                 $currencyCode
             );
@@ -575,7 +527,7 @@ class FlightTravelOproController extends Controller
                 ], 400);
             }
 
-            // 5. RÉPONSE DYNAMIQUE POUR L'INTERFACE FRONTEND (React / Next.js)
+            // 5. RÉPONSE DYNAMIQUE POUR L'INTERFACE FRONTEND (Next.js)
             if (is_array($paymentResult) && isset($paymentResult['type']) && $paymentResult['type'] === 'redirect') {
                 return response()->json([
                     'status'       => 'redirect_required',

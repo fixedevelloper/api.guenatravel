@@ -32,6 +32,8 @@ class ProcessTravelportBooking implements ShouldQueue
 
 /**
  * Exécute le workflow d'émission complet (Étapes A → J du TripServices GDS v11).
+ * @param FlightBookingService $bookingService
+ * @throws \Exception
  */
 public function handle(FlightBookingService $bookingService): void
 {
